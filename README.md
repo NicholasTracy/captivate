@@ -75,17 +75,125 @@ Join us on [Discord](https://discord.gg/96DVPcMUUv) or on the [Github Discussion
 
 ## Developers
 
-**Prereqs:** Node, NPM, Python, and XCode Command Line Tools (for Mac) or Visual Studio C++ Build Environment (for Windows).
+### Prerequisites
 
-`git clone https://github.com/NicholasTracy/captivate.git` <-- download the repo locally
+- Node >= 14.x
+- npm >= 7.x
+- Python
+- Build tools for native modules:
+  - macOS: Xcode Command Line Tools
+  - Windows: Visual Studio C++ Build Environment
 
-`git submodule update --init --recursive` <-- download submodules
+### Local setup
 
-`git lfs pull` <-- Download large files
+```bash
+git clone https://github.com/NicholasTracy/captivate.git
+git submodule update --init --recursive
+git lfs pull
+npm install
+npm start
+```
 
-`npm install` <-- install node dependencies
+`npm start` launches renderer dev server and also spawns:
 
-`npm start` <-- run the app in development mode with hot-reloading
+- preload builder (`start:preload`)
+- visualizer dev server (`start:visualizer`)
+- Electron main process (`start:main`)
+
+### Architecture at a glance
+
+Captivate 2 is an Electron app with three runtime surfaces:
+
+- **Main process** (`src/main/**`): device connections, DMX output engine, Art-Net output, IPC handlers, detached windows.
+- **Renderer** (`src/renderer/**`): editor UI, state management, fixture library editing/importing, scene and device config.
+- **Visualizer runtime** (`src/visualizer/**`): video/3D visual output synchronized from realtime state.
+
+State synchronization uses IPC channels in `src/shared/ipc_channels.ts`.
+
+### Core workflows and codepaths
+
+#### 1) Fixture library workflow (import, parse, persist)
+
+- UI entry point: **Universe page** (`src/renderer/pages/Universe.tsx`) -> **Fixtures panel** (`src/renderer/dmx/MyFixtures.tsx`)
+- Import sources:
+  - Local files via open dialog (`load_file` IPC)
+  - Online search modal (`src/renderer/dmx/QlcFixtureBrowserModal.tsx`)
+    - QLC+ GitHub fixture repo
+    - Open Fixture Library GitHub fixture repo
+- Parsing and normalization: `src/shared/fixtureLibrary.ts`
+  - Accepts Captivate fixture JSON, OFL JSON, and QLC+ `.qxf` XML
+  - Rejects empty/invalid fixture payloads with explicit errors
+- Default fixture database storage:
+  - Main process path builder: `src/main/fixtureLibraryStorage.ts`
+  - Stored at: `<electron userData>/fixture-library/captivate-fixtures.captivate-fixtures`
+- Startup sync:
+  - Primary window auto-loads default fixture library at boot (`src/renderer/index.tsx`)
+  - Missing file is treated as normal (no startup error)
+- Shutdown sync:
+  - Main window quit flow saves fixture library only when changed (`src/main/main.ts`)
+
+#### 2) DMX output + routing workflow
+
+- Realtime engine loop: `src/main/engine/engine.ts`
+- USB DMX connections: `src/main/engine/connections/dmx/**`
+  - Device type auto-detected as **DmxUsbPro** or **OpenDmxUsb**
+  - OpenDMX refresh rate is configurable in UI
+- Art-Net output: `src/main/engine/connections/art-net/ArtNetManager.ts`
+  - Routing is configurable per universe (or fallback IP)
+- Connection UI: `src/renderer/overlays/Devices.tsx`
+  - Universe count range: **1..16**
+  - Per-device universe assignment for DMX adapters
+  - Per-universe Art-Net IP routing
+
+#### 3) 3D lighting preview workflow
+
+- Page entry: `src/renderer/pages/Lighting3D.tsx`
+- Preview fixture mapping: `src/renderer/pages/lightingPreviewFixtures.ts`
+- Fixture/source data: DMX state in `src/renderer/redux/dmxSlice.ts`
+- Available controls in the page:
+  - Curtain toggle
+  - Bounds overlay toggle
+  - Room toggle + room width/depth/height inputs
+  - Fog slider (`0.00` to `1.00`)
+- Important constraints:
+  - Room dimensions are clamped to a minimum of **5 ft**
+  - Stage dimensions are normalized and bounded in `src/shared/stage.ts`
+  - If no fixtures exist, the page intentionally shows an empty-state message
+
+### Save formats
+
+- Project save/load format: `.captivate` (`src/renderer/menu/SaveLoad.tsx`)
+- Fixture library format: `.captivate-fixtures` (also accepts `.json`, `.db`, `.qxf` for import)
+- Save dialog supports partial save domains:
+  - DMX settings
+  - Light scenes
+  - Visual scenes
+  - Device settings
+
+### Troubleshooting runbook
+
+#### DMX device not outputting
+
+1. Open **Connections** overlay.
+2. Verify the adapter appears in DMX available devices.
+3. Ensure the device is enabled (connectable) and connected.
+4. Confirm assigned universe matches your fixture universe.
+5. If using OpenDMX, adjust **Open Dmx Refresh Rate**.
+6. Expand **Troubleshoot** section to inspect serial port metadata and copy details for debugging.
+
+#### Art-Net not outputting
+
+1. Set universe count to include desired universe.
+2. Set destination IP for each universe in **Art-Net Routing**.
+3. Leave universe IP blank to intentionally disable that route.
+4. Validate target IP format (invalid addresses are ignored by sender code).
+
+#### Fixture import fails
+
+1. Confirm file is valid Captivate fixture JSON, OFL fixture JSON, or QLC+ `.qxf`.
+2. For online import, verify internet access (GitHub API/raw fetch is required).
+3. Retry with **Refresh** in online fixture modal.
+4. Check parse error message surfaced by import UI for exact failure reason.
 
 Thanks to [electron-react-boilerplate](https://github.com/electron-react-boilerplate/electron-react-boilerplate) for the app boilerplate
 
