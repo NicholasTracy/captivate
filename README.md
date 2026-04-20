@@ -136,6 +136,91 @@ CI runs **`npm run package`** on macOS, Windows, and Ubuntu after `setup-node` (
   `assets/ndi-runtime/`
 - Use the **Streaming** page in-app to run diagnostics for FFmpeg + NDI support.
 
+### Fixture library workflow (developer runbook)
+
+Captivate maintains a default fixture database on disk and also allows one-off
+fixture imports (from Captivate JSON, Open Fixture Library JSON, or QLC+ XML).
+
+#### Default fixture database path and lifecycle
+
+- Default path is:
+  - `app.getPath('userData')/fixture-library/captivate-fixtures.captivate-fixtures`
+  - implemented in `src/main/fixtureLibraryStorage.ts`
+- Main process IPC surfaces:
+  - `load_fixture_library_default`
+  - `save_fixture_library_default`
+  - `get_fixture_library_default_path`
+  - registered in `src/main/engine/ipcHandler.ts`
+- Renderer helpers live in `src/renderer/autosave.ts`.
+
+#### In-app workflow
+
+- **Save DB** (`src/renderer/dmx/MyFixtures.tsx`) serializes all current fixture
+  types with `serializeFixtureLibrary(...)` and writes to the default path.
+- **Load DB** reads the default path and appends fixtures to the current project.
+- **Import From File** parses selected fixture files (Captivate JSON / OFL JSON /
+  QLC+ XML) via `parseFixtureLibrary(...)`.
+- **Search For Fixture Online** fetches fixture definitions from:
+  - QLC+ GitHub repo (`.qxf`)
+  - Open Fixture Library GitHub (`.json`)
+
+#### Startup + migration behavior
+
+- Startup fixture-library sync runs only in the **primary window** (not detached
+  page windows), see `src/renderer/index.tsx`.
+- If autosave/project data is incompatible, Captivate can reset to defaults and
+  prompt to import the saved fixture database from the default path.
+- On app quit, main performs a best-effort dirty-check save of fixture types to
+  the default fixture database (`src/main/main.ts`).
+
+#### Common pitfalls
+
+- `Load DB` currently clones imported fixtures with new ids, so repeated loads can
+  create duplicates.
+- If a fixture file is structurally valid JSON/XML but has no usable fixture data
+  (`name + channels`), import fails with validation errors from
+  `src/shared/fixtureLibrary.ts`.
+- Detached pages do not run startup fixture-library auto-load by design; this
+  avoids duplicate import side effects across windows.
+
+### Lighting 3D detached preview architecture (developer notes)
+
+Lighting 3D runs as a detached page window so the primary renderer stays
+responsive.
+
+#### Window + IPC flow
+
+1. Main/primary UI opens Lighting 3D through `open_page_window('Lighting3D')`.
+2. Main creates a detached window (`persist:captivate-lighting3d`) in
+   `src/main/main.ts`.
+3. On detached page load, main sends a full bootstrap snapshot over
+   `lighting3d_preview_bootstrap`.
+4. Realtime ticks are streamed over `lighting3d_realtime_tick` (throttled to
+   ~60Hz by `LIGHTING3D_TICK_MIN_MS = 17`).
+5. Renderer Lighting 3D page applies:
+   - full bootstrap state into redux (`resetRemoteState`)
+   - slim realtime ticks through `Lighting3dPreviewRuntimeManager`
+
+#### Tick generation path
+
+- Main sends realtime slices to `lighting3dUtilityWorkerHost`.
+- Utility process (`src/main/workers/lighting3dPreviewWorker.ts`) builds tick
+  payloads off the main thread when available.
+- If worker startup/post fails, main falls back to synchronous tick building
+  (`buildLighting3dRealtimeTick`).
+
+#### Troubleshooting stale or choppy detached preview
+
+- Confirm detached window is actually on `page=Lighting3D`.
+- Verify bootstrap and tick handlers are registered in `src/renderer/index.tsx`.
+- Export telemetry snapshot and inspect:
+  - `lighting3d.render.fps_1s`
+  - `lighting3d.render.frame_ms_avg`
+  - `lighting3d.render.frame_ms_max_1s`
+  - `engine.realtime.tick_ms`
+- For timeline-level investigation, enable live NDJSON
+  (`CAPTIVATE_TELEMETRY_LIVE_LOG=1`) and inspect Lighting 3D marks.
+
 Thanks to [electron-react-boilerplate](https://github.com/electron-react-boilerplate/electron-react-boilerplate) for the app boilerplate
 
 [MIT License](https://github.com/spensbot/Captivate2/blob/master/LICENSE)
