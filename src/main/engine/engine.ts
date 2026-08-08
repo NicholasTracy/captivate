@@ -1372,7 +1372,8 @@ function recomputeFrozenTransportDmx(
   const computedDmxOutByUniverse = calculateDmx(
     controlState,
     splitStates,
-    frozenTimeState
+    frozenTimeState,
+    _latestAudioMetrics
   )
   finalizeDmxUniverses(controlState, computedDmxOutByUniverse)
   const dmxOutByUniverse = reuseUnchangedDmxOutByUniverse(
@@ -1448,7 +1449,8 @@ function getNextRealtimeState(
     const computedDmxOutByUniverse = calculateDmx(
       controlState,
       splitStates,
-      dmxTimeState
+      dmxTimeState,
+      _latestAudioMetrics
     )
     const atmos = _atmosphericsOutputManager.apply(
       controlState,
@@ -1584,7 +1586,8 @@ function getNextRealtimeState(
     const computedDmxOutByUniverse = calculateDmx(
       controlState,
       splitStates,
-      dmxTimeState
+      dmxTimeState,
+      _latestAudioMetrics
     )
     atmos = _atmosphericsOutputManager.apply(
       controlState,

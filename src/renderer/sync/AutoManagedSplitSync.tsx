@@ -110,6 +110,8 @@ export default function AutoManagedSplitSync() {
           moverSpread: 0,
           moverMirrorX: 0,
           moverMirrorY: 0,
+          moverPhaseX: 0,
+          moverPhaseY: 0,
           moverMode: 0,
           focus: 0.5,
           prism: 0,

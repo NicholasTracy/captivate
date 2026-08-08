@@ -28,6 +28,8 @@ export type DefaultParam =
   | 'moverSpread'
   | 'moverMirrorX'
   | 'moverMirrorY'
+  | 'moverPhaseX'
+  | 'moverPhaseY'
   | 'moverMode'
   | 'atmosFxtrOnOff'
   | 'atmosFxtrLevel'
@@ -103,6 +105,8 @@ export function initParams(): { [key in DefaultParam]: number } {
     moverSpread: 0.0,
     moverMirrorX: 0.0,
     moverMirrorY: 0.0,
+    moverPhaseX: 0.0,
+    moverPhaseY: 0.0,
     moverMode: 0.0,
     atmosFxtrOnOff: 0.5,
     atmosFxtrLevel: 1.0,
@@ -148,6 +152,8 @@ const defaultParams: { [key in DefaultParam]: number } = {
   moverSpread: 0.0,
   moverMirrorX: 0.0,
   moverMirrorY: 0.0,
+  moverPhaseX: 0.0,
+  moverPhaseY: 0.0,
   moverMode: 0.0,
   atmosFxtrOnOff: 0.5,
   atmosFxtrLevel: 1.0,
@@ -217,6 +223,8 @@ export const defaultParamsList: DefaultParam[] = [
   'moverSpread',
   'moverMirrorX',
   'moverMirrorY',
+  'moverPhaseX',
+  'moverPhaseY',
   'moverMode',
   'atmosFxtrOnOff',
   'atmosFxtrLevel',
@@ -250,6 +258,8 @@ const paramDisplayNames: { [key: string]: string } = {
   moverSpread: 'Tandem Spread',
   moverMirrorX: 'Mirror Left/Right',
   moverMirrorY: 'Mirror Top/Bottom',
+  moverPhaseX: 'Phase Offset Pan',
+  moverPhaseY: 'Phase Offset Tilt',
   moverMode: 'Mover Mode',
   atmosFxtrOnOff: 'Atmosphere on/off',
   atmosFxtrLevel: 'Atmosphere level',

@@ -6,10 +6,27 @@ import {
   type MoverPadPlacementEntry,
   type MoverPadTarget,
 } from '../../shared/moverPadTargets'
+import {
+  moverPhaseOffsetCycles,
+  moverPhaseOrderIndexes,
+  moverPhaseStepCycles,
+  moverPhaseStepIsActive,
+} from '../../shared/moverPhaseFollow'
+import { getOutputParamsAtPhaseOffset } from '../../shared/modulation'
 import { evaluateSceneGroups } from '../../shared/sceneGroups'
 import { defaultOutputParams, type Params } from '../../shared/params'
 import { useActiveLightScene, useDmxSelector, useTypedSelector } from '../redux/store'
 import { useOutputParams } from '../redux/realtimeStore'
+import { useLfoAudioMetrics, useLfoBeats } from '../redux/realtimeSelectors'
+
+type PreviewUniverseFixture = {
+  id?: string
+  type: string
+  groups: string[]
+  universe?: number
+  ch?: number
+  window?: { x?: { pos?: number }; y?: { pos?: number } }
+}
 
 function clamp01(value: number): number {
   if (!Number.isFinite(value)) return 0
@@ -33,18 +50,24 @@ function fixtureMatchesSplitGroups(
   })
 }
 
-function buildMoverPlacementsForSplit(
+type SplitMoverFixture = {
+  key: string
+  groupName: string
+  x: number
+  y: number
+  sortOrder: number
+  universe: number
+  channel: number
+}
+
+/** Movers this split drives, with everything the pad preview needs to place them. */
+function collectSplitMovers(
   splitGroups: Record<string, boolean | undefined>,
   moverGroupByFixtureId: Record<string, string>,
-  universe: Array<{
-    id?: string
-    type: string
-    groups: string[]
-    window?: { x?: { pos?: number }; y?: { pos?: number } }
-  }>,
+  universe: PreviewUniverseFixture[],
   fixtureTypesByID: Record<string, FixtureType>
-): Record<string, MoverPadPlacementEntry[]> {
-  const fixturesByGroup: Record<string, MoverPadPlacementEntry[]> = {}
+): SplitMoverFixture[] {
+  const movers: SplitMoverFixture[] = []
 
   universe.forEach((fixture, fixtureIndex) => {
     const fixtureType = fixtureTypesByID[fixture.type]
@@ -61,24 +84,64 @@ function buildMoverPlacementsForSplit(
         ? fixture.id.trim()
         : `legacy-${fixtureIndex}-${fixture.type}`
 
-    const groupName =
-      moverGroupByFixtureId[fixtureId]?.trim() ||
-      fixtureType.name.trim() ||
-      'Fixture Group'
-
-    const placement: MoverPadPlacementEntry = {
+    movers.push({
       key: fixtureId,
+      groupName:
+        moverGroupByFixtureId[fixtureId]?.trim() ||
+        fixtureType.name.trim() ||
+        'Fixture Group',
       x: clamp01(fixture.window?.x?.pos ?? 0.5),
       y: clamp01(fixture.window?.y?.pos ?? 0.5),
       sortOrder: fixtureIndex,
-    }
-
-    const groupItems = fixturesByGroup[groupName] ?? []
-    groupItems.push(placement)
-    fixturesByGroup[groupName] = groupItems
+      universe: Math.max(1, Math.round(Number(fixture.universe) || 1)),
+      channel: Math.max(0, Math.round(Number(fixture.ch) || 0)),
+    })
   })
 
+  return movers
+}
+
+function groupPlacements(
+  movers: SplitMoverFixture[],
+  baseAimByKey: Map<string, { x?: number; y?: number }>
+): Record<string, MoverPadPlacementEntry[]> {
+  const fixturesByGroup: Record<string, MoverPadPlacementEntry[]> = {}
+
+  for (const mover of movers) {
+    const aim = baseAimByKey.get(mover.key)
+    const groupItems = fixturesByGroup[mover.groupName] ?? []
+    groupItems.push({
+      key: mover.key,
+      x: mover.x,
+      y: mover.y,
+      sortOrder: mover.sortOrder,
+      baseX: aim?.x,
+      baseY: aim?.y,
+    })
+    fixturesByGroup[mover.groupName] = groupItems
+  }
+
   return fixturesByGroup
+}
+
+/** Number of movers the split drives — the divisor for an even phase spread. */
+export function useSplitMoverCount(splitIndex: number): number {
+  const splitGroups = useActiveLightScene(
+    (scene) => scene.splitScenes[splitIndex]?.groups ?? {}
+  )
+  const universe = useDmxSelector((state) => state.universe)
+  const fixtureTypesByID = useDmxSelector((state) => state.fixtureTypesByID)
+
+  return useMemo(() => {
+    let count = 0
+    for (const fixture of universe) {
+      const fixtureType = fixtureTypesByID[fixture.type]
+      if (fixtureType === undefined || !isMoverFixtureType(fixtureType)) continue
+      if (!fixtureMatchesSplitGroups(fixture.groups, true, splitGroups)) continue
+      count += 1
+    }
+    return count
+  }, [fixtureTypesByID, splitGroups, universe])
 }
 
 export function useMoverPadFixtureTargets(
@@ -91,7 +154,10 @@ export function useMoverPadFixtureTargets(
   const splitGroups = useActiveLightScene(
     (scene) => scene.splitScenes[splitIndex]?.groups ?? {}
   )
+  const lightScene = useActiveLightScene((scene) => scene)
   const dmx = useDmxSelector((state) => state)
+  const beats = useLfoBeats()
+  const audio = useLfoAudioMetrics()
 
   return useMemo(() => {
     if (!moverAdvancedControlEnabled) {
@@ -99,26 +165,67 @@ export function useMoverPadFixtureTargets(
     }
 
     const moverMode = parseMoverModeFromParams(params)
-    if (moverMode === 0) {
+    const stepX = moverPhaseStepCycles(params.moverPhaseX)
+    const stepY = moverPhaseStepCycles(params.moverPhaseY)
+    const phasePan = moverPhaseStepIsActive(stepX) && Number.isFinite(params.xAxis)
+    const phaseTilt = moverPhaseStepIsActive(stepY) && Number.isFinite(params.yAxis)
+    if (moverMode === 0 && !phasePan && !phaseTilt) {
       return null
     }
 
-    const fixturesByGroup = buildMoverPlacementsForSplit(
+    const movers = collectSplitMovers(
       splitGroups,
       dmx.moverGroupByFixtureId,
       dmx.universe,
       dmx.fixtureTypesByID
     )
 
-    const targets = resolveMoverPadTargetsFromParams(fixturesByGroup, params)
+    const baseAimByKey = new Map<string, { x?: number; y?: number }>()
+    if (phasePan || phaseTilt) {
+      const orderIndexByKey = moverPhaseOrderIndexes(movers)
+      for (const [key, orderIndex] of orderIndexByKey) {
+        if (orderIndex === 0) continue
+        const aim: { x?: number; y?: number } = {}
+        if (phasePan) {
+          aim.x = getOutputParamsAtPhaseOffset(
+            beats,
+            lightScene,
+            splitIndex,
+            ['xAxis'],
+            moverPhaseOffsetCycles(orderIndex, stepX),
+            audio
+          ).xAxis
+        }
+        if (phaseTilt) {
+          aim.y = getOutputParamsAtPhaseOffset(
+            beats,
+            lightScene,
+            splitIndex,
+            ['yAxis'],
+            moverPhaseOffsetCycles(orderIndex, stepY),
+            audio
+          ).yAxis
+        }
+        baseAimByKey.set(key, aim)
+      }
+    }
+
+    const targets = resolveMoverPadTargetsFromParams(
+      groupPlacements(movers, baseAimByKey),
+      params
+    )
     return targets.length > 0 ? targets : null
   }, [
+    audio,
+    beats,
     dmx.fixtureTypesByID,
     dmx.moverGroupByFixtureId,
     dmx.universe,
+    lightScene,
     moverAdvancedControlEnabled,
     params,
     splitGroups,
+    splitIndex,
   ])
 }
 

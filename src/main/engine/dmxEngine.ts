@@ -37,6 +37,18 @@ import {
   resolveMoverPadTargetsForGroup,
 } from '../../shared/moverPadTargets'
 import {
+  moverPhaseOffsetCycles,
+  moverPhaseOrderIndexes,
+  moverPhaseStepCycles,
+  moverPhaseStepIsActive,
+  type MoverPhaseOrderEntry,
+} from '../../shared/moverPhaseFollow'
+import { getOutputParamsAtPhaseOffset } from '../../shared/modulation'
+import {
+  initAudioEngineMetrics,
+  type AudioEngineMetrics,
+} from '../../shared/audioEngine'
+import {
   dmxRandomizerSlotIndex,
   getDmxRandomizerFixtures,
 } from '../../shared/splitRandomizer'
@@ -579,6 +591,173 @@ function resolveMoverAxisTargetWithPathing(
   }
 }
 
+/** Per-fixture pan/tilt aim for movers running phase-offset follow, keyed by fixture id. */
+type MoverPhaseAim = {
+  xByFixtureId: Map<string, number>
+  yByFixtureId: Map<string, number>
+}
+
+const MOVER_PHASE_AXIS_PARAMS = ['xAxis', 'yAxis'] as const
+const MOVER_PHASE_PAN_PARAMS = ['xAxis'] as const
+const MOVER_PHASE_TILT_PARAMS = ['yAxis'] as const
+
+function buildFixtureAddressMap(
+  universe: CleanReduxState['dmx']['universe']
+): Map<string, { universe: number; channel: number }> {
+  const addressByFixtureId = new Map<string, { universe: number; channel: number }>()
+  for (const fixture of universe) {
+    const fixtureId = typeof fixture.id === 'string' ? fixture.id.trim() : ''
+    if (fixtureId.length <= 0) continue
+    addressByFixtureId.set(fixtureId, {
+      universe: Math.max(1, Math.round(Number(fixture.universe) || 1)),
+      channel: Math.max(0, Math.round(Number(fixture.ch) || 0)),
+    })
+  }
+  return addressByFixtureId
+}
+
+function moverPhaseOrderEntriesForSplit(
+  splitMovers: FlattenedFixture[],
+  addressByFixtureId: Map<string, { universe: number; channel: number }>
+): MoverPhaseOrderEntry[] {
+  const entries: MoverPhaseOrderEntry[] = []
+  for (const fixture of splitMovers) {
+    const fixtureId = fixture.fixtureId?.trim() ?? ''
+    if (fixtureId.length <= 0) continue
+    const address = addressByFixtureId.get(fixtureId)
+    if (address === undefined) continue
+    entries.push({ key: fixtureId, ...address })
+  }
+  return entries
+}
+
+/**
+ * Phase-offset follow aim for every split, computed once per DMX frame (universes share it).
+ * Each mover is re-modulated at its own slice of the LFO cycle; the first mover in DMX-address
+ * order keeps the split aim, so the pad cursor still tracks something real.
+ *
+ * Advanced Movers gates this the same way it gates tandem / mirror — with it off, a split
+ * aims every mover at the same point.
+ */
+function buildMoverPhaseAimBySplit(
+  state: CleanReduxState,
+  splitStates: SplitState[],
+  timeState: TimeState,
+  audioMetrics: AudioEngineMetrics
+): Array<MoverPhaseAim | null> {
+  if (state.gui.moverAdvancedControlEnabled !== true) {
+    return []
+  }
+
+  const scenes = state.control.light
+  const activeScene = scenes.byId[scenes.active]
+  const splitScenes = activeScene?.splitScenes
+  if (splitScenes === undefined || splitScenes.length <= 0) {
+    return []
+  }
+
+  const phaseConfigs = splitScenes.map((splitScene, splitIndex) => {
+    const outputParams = splitStates[splitIndex]?.outputParams
+    if (outputParams === undefined) return null
+
+    const resolvedAxisParams = { ...splitScene.baseParams, ...outputParams }
+    const stepX = moverPhaseStepCycles(resolvedAxisParams.moverPhaseX)
+    const stepY = moverPhaseStepCycles(resolvedAxisParams.moverPhaseY)
+    const phasePan =
+      moverPhaseStepIsActive(stepX) && Number.isFinite(resolvedAxisParams.xAxis)
+    const phaseTilt =
+      moverPhaseStepIsActive(stepY) && Number.isFinite(resolvedAxisParams.yAxis)
+    if (!phasePan && !phaseTilt) return null
+
+    return { stepX, stepY, phasePan, phaseTilt }
+  })
+
+  if (phaseConfigs.every((config) => config === null)) {
+    return phaseConfigs
+  }
+
+  const allFixtures = flatten_fixtures(
+    state.dmx.universe,
+    state.dmx.fixtureTypesByID,
+    state.dmx.moverGroupByFixtureId
+  )
+  const addressByFixtureId = buildFixtureAddressMap(state.dmx.universe)
+
+  return phaseConfigs.map((config, splitIndex) => {
+    if (config === null) return null
+
+    const splitMovers = getFixturesInGroups(
+      allFixtures,
+      splitScenes[splitIndex].groups
+    ).filter(hasMoverAxisChannels)
+    const orderIndexByFixtureId = moverPhaseOrderIndexes(
+      moverPhaseOrderEntriesForSplit(splitMovers, addressByFixtureId)
+    )
+    if (orderIndexByFixtureId.size <= 1) return null
+
+    const xByFixtureId = new Map<string, number>()
+    const yByFixtureId = new Map<string, number>()
+    // One evaluation covers both axes when they share a step.
+    const sharedStep =
+      config.phasePan && config.phaseTilt && config.stepX === config.stepY
+
+    const aimAt = (params: readonly string[], offsetCycles: number) =>
+      getOutputParamsAtPhaseOffset(
+        timeState.beats,
+        activeScene,
+        splitIndex,
+        params,
+        offsetCycles,
+        audioMetrics
+      )
+
+    for (const [fixtureId, orderIndex] of orderIndexByFixtureId) {
+      if (orderIndex === 0) continue
+
+      if (sharedStep) {
+        const aim = aimAt(
+          MOVER_PHASE_AXIS_PARAMS,
+          moverPhaseOffsetCycles(orderIndex, config.stepX)
+        )
+        if (aim.xAxis !== undefined) xByFixtureId.set(fixtureId, aim.xAxis)
+        if (aim.yAxis !== undefined) yByFixtureId.set(fixtureId, aim.yAxis)
+        continue
+      }
+
+      if (config.phasePan) {
+        const aim = aimAt(
+          MOVER_PHASE_PAN_PARAMS,
+          moverPhaseOffsetCycles(orderIndex, config.stepX)
+        )
+        if (aim.xAxis !== undefined) xByFixtureId.set(fixtureId, aim.xAxis)
+      }
+      if (config.phaseTilt) {
+        const aim = aimAt(
+          MOVER_PHASE_TILT_PARAMS,
+          moverPhaseOffsetCycles(orderIndex, config.stepY)
+        )
+        if (aim.yAxis !== undefined) yByFixtureId.set(fixtureId, aim.yAxis)
+      }
+    }
+
+    if (xByFixtureId.size <= 0 && yByFixtureId.size <= 0) return null
+    return { xByFixtureId, yByFixtureId }
+  })
+}
+
+function moverPhaseAimForFixture(
+  phaseAim: MoverPhaseAim | null | undefined,
+  fixture: FlattenedFixture
+): { x?: number; y?: number } {
+  if (phaseAim === null || phaseAim === undefined) return {}
+  const fixtureId = fixture.fixtureId?.trim() ?? ''
+  if (fixtureId.length <= 0) return {}
+  return {
+    x: phaseAim.xByFixtureId.get(fixtureId),
+    y: phaseAim.yByFixtureId.get(fixtureId),
+  }
+}
+
 function buildMoverAxisOverridesForSplit(
   splitSceneFixtures: FlattenedFixture[],
   baseParams: SplitState['outputParams'],
@@ -593,6 +772,7 @@ function buildMoverAxisOverridesForSplit(
   },
   options?: {
     advancedControl?: boolean
+    phaseAim?: MoverPhaseAim | null
   }
 ): { [fixtureIdx: number]: MoverAxisOverrides } {
   const axisOverridesByFixtureIdx: { [fixtureIdx: number]: MoverAxisOverrides } = {}
@@ -601,6 +781,7 @@ function buildMoverAxisOverridesForSplit(
     ...outputParams,
   }
   const advancedControl = options?.advancedControl === true
+  const phaseAim = options?.phaseAim ?? null
 
   if (!advancedControl) {
     const baseX = clampNormalized(Number(resolvedAxisParams.xAxis ?? 0.5))
@@ -699,12 +880,20 @@ function buildMoverAxisOverridesForSplit(
     })
 
     const padTargets = resolveMoverPadTargetsForGroup(
-      orderedFixtures.map((entry) => ({
-        key: String(entry.fixtureIdx),
-        x: entry.x,
-        y: entry.y,
-        sortOrder: entry.fixtureIdx,
-      })),
+      orderedFixtures.map((entry) => {
+        // The follow override pins the whole group, so phase-offset follow steps aside.
+        const fixtureAim = groupOverrideEnabled
+          ? {}
+          : moverPhaseAimForFixture(phaseAim, entry.fixture)
+        return {
+          key: String(entry.fixtureIdx),
+          x: entry.x,
+          y: entry.y,
+          sortOrder: entry.fixtureIdx,
+          baseX: fixtureAim.x,
+          baseY: fixtureAim.y,
+        }
+      }),
       {
         baseX,
         baseY,
@@ -793,7 +982,8 @@ function calculateDmxForUniverse(
   state: CleanReduxState,
   splitStates: SplitState[],
   timeState: TimeState,
-  universeIndex: number
+  universeIndex: number,
+  moverPhaseAimBySplit: Array<MoverPhaseAim | null>
 ): number[] {
   const universeFixtures = state.dmx.universe.filter(
     (fixture) => (fixture.universe ?? 1) === universeIndex
@@ -889,10 +1079,12 @@ function calculateDmxForUniverse(
     const plannerNamespace = `u${universeIndex}`
 
     if (activeScene?.splitScenes) {
+      let splitIndex = -1
       for (const [{ outputParams, randomizer }, splitScene] of zip(
         splitStates,
         activeScene.splitScenes
       )) {
+      splitIndex += 1
       const splitGroups = splitScene.groups
       const splitHasAxisBundle =
         splitScene.baseParams.xAxis !== undefined ||
@@ -943,6 +1135,7 @@ function calculateDmxForUniverse(
               },
               {
                 advancedControl: state.gui.moverAdvancedControlEnabled === true,
+                phaseAim: moverPhaseAimBySplit[splitIndex] ?? null,
               }
             )
           : {}
@@ -1142,14 +1335,27 @@ export function finalizeDmxUniverses(
 export function calculateDmx(
   state: CleanReduxState,
   splitStates: SplitState[],
-  timeState: TimeState
+  timeState: TimeState,
+  audioMetrics: AudioEngineMetrics = initAudioEngineMetrics()
 ): number[][] {
   const universeCount = getUniverseCount(state)
   const outputByUniverse: number[][] = []
+  const moverPhaseAimBySplit = buildMoverPhaseAimBySplit(
+    state,
+    splitStates,
+    timeState,
+    audioMetrics
+  )
 
   for (let universeIndex = 1; universeIndex <= universeCount; universeIndex++) {
     outputByUniverse.push(
-      calculateDmxForUniverse(state, splitStates, timeState, universeIndex)
+      calculateDmxForUniverse(
+        state,
+        splitStates,
+        timeState,
+        universeIndex,
+        moverPhaseAimBySplit
+      )
     )
   }
 

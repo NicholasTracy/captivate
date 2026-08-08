@@ -60,6 +60,8 @@ const moverOnlyParamSet = new Set<string>([
   'moverSpread',
   'moverMirrorX',
   'moverMirrorY',
+  'moverPhaseX',
+  'moverPhaseY',
   'moverMode',
 ])
 const atmosphereOnlyParamSet = new Set<string>(['atmosFxtrOnOff', 'atmosFxtrLevel'])
@@ -80,6 +82,8 @@ export const paramBundles: { [key in ParamBundle]: DefaultParam[] } = {
     'moverSpread',
     'moverMirrorX',
     'moverMirrorY',
+    'moverPhaseX',
+    'moverPhaseY',
     'moverMode',
   ],
   position: ['x', 'y', 'width', 'height', 'positionFeather'],

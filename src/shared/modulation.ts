@@ -569,22 +569,41 @@ export function isAudioLfoShape(shape: LfoShape): boolean {
   return shape === LfoShape.AudioBand || shape === LfoShape.AudioEnergy
 }
 
+/** Wrap a cycle offset into [0, 1); 0 means "no offset" and keeps the fast path. */
+function normalizePhaseOffsetCycles(cycles: number): number {
+  if (!Number.isFinite(cycles) || cycles === 0) return 0
+  const wrapped = cycles % 1
+  return wrapped < 0 ? wrapped + 1 : wrapped
+}
+
+/** Audio LFOs are live envelopes with no cycle to slide along, so they are left alone. */
+function lfoAtPhaseOffset(lfo: Lfo, cycleOffset: number): Lfo {
+  if (cycleOffset === 0 || isAudioLfoShape(lfo.shape)) return lfo
+  return { ...lfo, phaseShift: lfo.phaseShift + cycleOffset }
+}
+
 /**
  * LFO definitions after applying `intermod:lfo:*` routes for one split (same rules as the
  * DMX engine). Wave LFO source values use the split's phase-offset clock when present.
  * Audio LFO sources are peeked (no envelope advance) on the true beat clock so phase
  * offsets and a later effective-LFO sample cannot corrupt shared envelope state.
+ *
+ * `phaseOffsetCycles` slides every wave LFO along its own cycle (mover phase-offset
+ * follow). It is applied after inter-mod so an `intermod:*:phaseShift` route cannot
+ * clamp it away.
  */
 export function effectiveLfosAtSplit(
   scene: LightSceneLike,
   splitIndex: number,
   beats: number,
-  audioInput: AudioEngineMetrics
+  audioInput: AudioEngineMetrics,
+  phaseOffsetCycles: number = 0
 ): Lfo[] {
   const splitScene = scene.splitScenes[splitIndex]
   const phaseOff = splitScene?.splitModShaping?.phaseOffsetBeats
   const effectiveBeats =
     beats + (Number.isFinite(phaseOff) ? Number(phaseOff) : 0)
+  const cycleOffset = normalizePhaseOffsetCycles(phaseOffsetCycles)
 
   const sourceLfoValues = scene.modulators.map((modulator, sourceIndex) => {
     if (isAudioLfoShape(modulator.lfo.shape)) {
@@ -594,7 +613,7 @@ export function effectiveLfosAtSplit(
       })
     }
     return getModulatorLfoValue(
-      modulator.lfo,
+      lfoAtPhaseOffset(modulator.lfo, cycleOffset),
       effectiveBeats,
       audioInput,
       sourceIndex
@@ -630,6 +649,13 @@ export function effectiveLfosAtSplit(
       enforceAudioBandCutoffGap(lfo, bandBounds)
     }
   })
+
+  if (cycleOffset !== 0) {
+    for (const lfo of effectiveLfos) {
+      if (isAudioLfoShape(lfo.shape)) continue
+      lfo.phaseShift = lfo.phaseShift + cycleOffset
+    }
+  }
 
   return effectiveLfos
 }
@@ -709,6 +735,67 @@ export function getOutputParams(
       outputParams[param] = outputParam
     }
   })
+
+  return outputParams
+}
+
+/**
+ * Re-evaluates a few of a split's params with every wave LFO slid `phaseOffsetCycles`
+ * along its own cycle — the per-fixture driver behind mover phase-offset follow. At
+ * offset 0 this returns exactly what {@link getOutputParams} produced for the split.
+ *
+ * Audio LFOs are peeked, never advanced: {@link getOutputParams} already owns their
+ * envelope state for this tick, and one envelope cannot be in several phases at once.
+ * Params with no base value on the split are omitted (nothing to modulate).
+ */
+export function getOutputParamsAtPhaseOffset(
+  beats: number,
+  scene: LightSceneLike,
+  splitIndex: number,
+  paramKeys: readonly string[],
+  phaseOffsetCycles: number,
+  audioInput: AudioEngineMetrics = initAudioEngineMetrics()
+): Modulation {
+  const outputParams: Modulation = {}
+  const splitScene = scene.splitScenes[splitIndex]
+  if (splitScene === undefined) {
+    return outputParams
+  }
+
+  const shaping = splitScene.splitModShaping
+  const phaseOff = shaping?.phaseOffsetBeats ?? 0
+  const effectiveBeats = beats + (Number.isFinite(phaseOff) ? phaseOff : 0)
+  const effectiveLfos = effectiveLfosAtSplit(
+    scene,
+    splitIndex,
+    beats,
+    audioInput,
+    phaseOffsetCycles
+  )
+
+  const snapshots: ModSnapshot[] = scene.modulators.map((modulator, index) => {
+    const lfo = effectiveLfos[index]
+    const lfoVal = isAudioLfoShape(lfo.shape)
+      ? getModulatorLfoValue(lfo, beats, audioInput, index, {
+          advance: false,
+          splitIndex,
+        })
+      : getModulatorLfoValue(lfo, effectiveBeats, audioInput, index)
+    return {
+      modulation: modulator.splitModulations[splitIndex],
+      lfoVal: applySplitModShapingToLfoVal(lfoVal, shaping),
+    }
+  })
+
+  for (const param of paramKeys) {
+    const baseParam = splitScene.baseParams[param]
+    if (baseParam === undefined) continue
+    const anchor = splitScene.modManualAnchors?.[param] ?? 'center'
+    const outputParam = getOutputParam(baseParam, param, snapshots, anchor)
+    if (outputParam !== undefined) {
+      outputParams[param] = outputParam
+    }
+  }
 
   return outputParams
 }

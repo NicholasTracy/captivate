@@ -148,3 +148,14 @@ export function MoverPatternHelpButton() {
     </FieldHelpButton>
   )
 }
+
+export function MoverPhaseOffsetHelpButton() {
+  return (
+    <FieldHelpButton ariaLabel="How phase offset follow works">
+      Delays each mover&apos;s pan/tilt modulation by a slice of the LFO cycle, so the
+      move rolls across the rig instead of firing in unison. Movers are ordered by DMX
+      address; the first one keeps the pad aim. 0° is unison, 360° wraps back to unison.
+      Pan and tilt are independent, and both sliders can be driven by an LFO.
+    </FieldHelpButton>
+  )
+}

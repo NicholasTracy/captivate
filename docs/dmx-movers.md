@@ -84,8 +84,33 @@ Advanced Movers controls:
 | 2 Mirror | Mirror left/right and/or top/bottom within the group |
 
 With **Advanced** off, every mover in the split gets the same base aim (no
-group/tandem/mirror). With Advanced on, `resolveMoverPadTargetsForGroup` builds
-per-fixture targets; missing pan+tilt targets fall back to home mapping.
+group/tandem/mirror/phase). With Advanced on, `resolveMoverPadTargetsForGroup`
+builds per-fixture targets; missing pan+tilt targets fall back to home mapping.
+
+### Phase-offset follow
+
+`moverPhaseX` / `moverPhaseY` stagger each mover's pan / tilt **modulation** by a
+slice of the LFO cycle, so a move rolls across the rig instead of firing in unison.
+Both are normal 0–1 params, so an LFO can drive the stagger itself.
+
+| Aspect | Behavior |
+|--------|----------|
+| Slider range | 0–1 = **0–360° per mover** (`MOVER_PHASE_MAX_DEGREES`) |
+| Fixture order | DMX address — universe first, then start channel |
+| Rung 0 | First mover in that order keeps the split aim (matches the pad cursor) |
+| Axes | Pan and tilt are independent; equal steps share one evaluation |
+| Interaction | Composes with tandem / mirror — the offset replaces each fixture's aim *before* spread and mirroring |
+| Follow override | Wins; a pinned group ignores phase offset |
+
+`360 / moverCount` spreads a split evenly (the UI shows this hint). Offsets past
+180° read as the wave running the other way.
+
+Mechanically, `getOutputParamsAtPhaseOffset` re-runs the split's modulation matrix
+with every **wave** LFO slid along its own cycle (`Lfo.phaseShift`), applied after
+inter-mod so an `intermod:*:phaseShift` route cannot clamp it away. Audio-shape LFOs
+are peeked, never advanced and never shifted — a live envelope has no cycle to slide
+along, and `getOutputParams` already owns its state for the tick. Aim is computed
+once per DMX frame in `calculateDmx` and shared across universes.
 
 Pathing runs only when the fixture has a planner key
 (`u{universe}:{fixtureId}:x{panCh}:y{tiltCh}`). Without planner state, output is
@@ -131,6 +156,8 @@ This matches the chatter fix that keeps fine off during pad tracking and travel.
 - **Unpatched → 0.** Mixer writes to unpatched addresses are cleared again during
   finalize.
 - **Status bar “No DMX output”** reflects USB enablement, not Art-Net-only setups.
+- **Phase offset needs movement to show.** With no LFO on pan/tilt every fixture sits
+  at the same static aim, so any phase offset looks like nothing happened.
 - **Legacy path:** if no axis overrides are present, `calculate_axis_channel` can
   still emit continuous fine — different from the park-at-0 travel path.
 

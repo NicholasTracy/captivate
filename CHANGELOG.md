@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+### Show control & DMX
+
+- Movers: **phase-offset follow**. New `moverPhaseX` / `moverPhaseY` params (0–360° per
+  fixture) stagger each mover's pan/tilt modulation along the LFO cycle, so a move rolls
+  across the rig instead of firing in unison. Fixture order is DMX address for now; both
+  sliders live in the Advanced Movers panel and can themselves be driven by an LFO.
+
 ## 1.1.3
 
 ### Fixes

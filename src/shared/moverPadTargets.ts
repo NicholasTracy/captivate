@@ -8,6 +8,12 @@ export type MoverPadPlacementEntry = {
   x: number
   y: number
   sortOrder?: number
+  /**
+   * Per-fixture aim, replacing the shared pad aim for this fixture only (mover
+   * phase-offset follow). Tandem spread and mirroring still apply on top of it.
+   */
+  baseX?: number
+  baseY?: number
 }
 
 export type MoverPadTarget = {
@@ -103,12 +109,21 @@ export function resolveMoverPadTargetsForGroup(
     const isRight = isRightFlags[entryIndex] === true
     const isBottom = isBottomFlags[entryIndex] === true
 
-    let fixtureX = hasPanTarget ? baseX : 0.5
-    let fixtureY = hasTiltTarget ? baseY : 0.5
+    const entryBaseX =
+      entry.baseX !== undefined && Number.isFinite(entry.baseX)
+        ? clampNormalized(entry.baseX)
+        : baseX
+    const entryBaseY =
+      entry.baseY !== undefined && Number.isFinite(entry.baseY)
+        ? clampNormalized(entry.baseY)
+        : baseY
+
+    let fixtureX = hasPanTarget ? entryBaseX : 0.5
+    let fixtureY = hasTiltTarget ? entryBaseY : 0.5
     let mirrored = false
 
     if (moverMode === 1 && hasPanTarget) {
-      fixtureX = baseX + (relX - 0.5) * spread
+      fixtureX = entryBaseX + (relX - 0.5) * spread
     }
 
     const applyGroupMirrorX = hasPanTarget && moverMode === 2 && mirrorLeftRight
@@ -125,8 +140,8 @@ export function resolveMoverPadTargetsForGroup(
 
     return {
       key: entry.key,
-      x: clampNormalized(hasPanTarget ? fixtureX : baseX),
-      y: clampNormalized(hasTiltTarget ? fixtureY : baseY),
+      x: clampNormalized(hasPanTarget ? fixtureX : entryBaseX),
+      y: clampNormalized(hasTiltTarget ? fixtureY : entryBaseY),
       mirrored,
     }
   })

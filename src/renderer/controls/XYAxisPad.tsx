@@ -11,7 +11,14 @@ import MidiOverlay_xy from '../base/MidiOverlay_xy'
 import { makeSetBaseParamAction } from '../redux/deviceState'
 import {
   MoverPatternHelpButton,
+  MoverPhaseOffsetHelpButton,
 } from '../pages/moverHelpButtons'
+import {
+  moverPhaseStepDegrees,
+  MOVER_PHASE_MAX_DEGREES,
+} from '../../shared/moverPhaseFollow'
+import { useOutputParam } from '../redux/realtimeStore'
+import { useSplitMoverCount } from '../hooks/useMoverPadFixtureTargets'
 
 interface Props {
   splitIndex: number
@@ -28,6 +35,15 @@ const MOVER_MODE_OPTIONS: MoverModeOption[] = ['follow', 'tandem', 'mirror']
 
 function applyCenterDetent(value: number): number {
   return Math.abs(value - 0.5) <= XY_CENTER_DETENT_RADIUS ? 0.5 : value
+}
+
+function clamp01(value: number): number {
+  if (!Number.isFinite(value)) return 0
+  return Math.min(1, Math.max(0, value))
+}
+
+function formatPhaseDegrees(value: number | undefined): string {
+  return `${Math.round(moverPhaseStepDegrees(value))}°`
 }
 
 function normalizeMoverMode(value: number): number {
@@ -85,7 +101,12 @@ export default function XYAxispad({ splitIndex }: Props) {
   const moverSpread = useBaseParam('moverSpread', splitIndex)
   const moverMirrorX = useBaseParam('moverMirrorX', splitIndex)
   const moverMirrorY = useBaseParam('moverMirrorY', splitIndex)
+  const moverPhaseX = useBaseParam('moverPhaseX', splitIndex)
+  const moverPhaseY = useBaseParam('moverPhaseY', splitIndex)
   const moverModeRaw = useBaseParam('moverMode', splitIndex)
+  const livePhaseX = useOutputParam('moverPhaseX', splitIndex)
+  const livePhaseY = useOutputParam('moverPhaseY', splitIndex)
+  const moverCount = useSplitMoverCount(splitIndex)
 
   useEffect(() => {
     if (xAxis === undefined || yAxis === undefined) {
@@ -96,6 +117,8 @@ export default function XYAxispad({ splitIndex }: Props) {
     if (moverSpread === undefined) nextParams.moverSpread = 0
     if (moverMirrorX === undefined) nextParams.moverMirrorX = 0
     if (moverMirrorY === undefined) nextParams.moverMirrorY = 0
+    if (moverPhaseX === undefined) nextParams.moverPhaseX = 0
+    if (moverPhaseY === undefined) nextParams.moverPhaseY = 0
     if (moverModeRaw === undefined) nextParams.moverMode = MOVER_MODE_FOLLOW
 
     if (Object.keys(nextParams).length > 0) {
@@ -111,6 +134,8 @@ export default function XYAxispad({ splitIndex }: Props) {
     moverMirrorX,
     moverMirrorY,
     moverModeRaw,
+    moverPhaseX,
+    moverPhaseY,
     moverSpread,
     splitIndex,
     xAxis,
@@ -132,6 +157,8 @@ export default function XYAxispad({ splitIndex }: Props) {
   const moverModeOption = moverModeToOption(moverMode)
   const mirrorXEnabled = moverMirrorX > 0.5
   const mirrorYEnabled = moverMirrorY > 0.5
+  const evenSpreadDegrees =
+    moverCount > 1 ? Math.round(MOVER_PHASE_MAX_DEGREES / moverCount) : null
 
   return (
     <Root>
@@ -274,6 +301,64 @@ export default function XYAxispad({ splitIndex }: Props) {
             </RadioGroup>
           </>
         )}
+
+        <ControlLabelRow>
+          <ControlLabel>Phase Offset Follow</ControlLabel>
+          <MoverPhaseOffsetHelpButton />
+        </ControlLabelRow>
+        <PhaseRow>
+          <PhaseLabel>Pan</PhaseLabel>
+          <SpreadInput
+            type="range"
+            title="Pan phase offset per mover, in DMX-address order"
+            min={0}
+            max={1}
+            step={0.005}
+            value={moverPhaseX ?? 0}
+            onMouseDown={(e) => e.stopPropagation()}
+            onClick={(e) => e.stopPropagation()}
+            onChange={(event) => {
+              dispatch(
+                setBaseParams({
+                  splitIndex,
+                  params: {
+                    moverPhaseX: clamp01(Number(event.target.value)),
+                  },
+                })
+              )
+            }}
+          />
+          <PhaseValue>{formatPhaseDegrees(livePhaseX)}</PhaseValue>
+        </PhaseRow>
+        <PhaseRow>
+          <PhaseLabel>Tilt</PhaseLabel>
+          <SpreadInput
+            type="range"
+            title="Tilt phase offset per mover, in DMX-address order"
+            min={0}
+            max={1}
+            step={0.005}
+            value={moverPhaseY ?? 0}
+            onMouseDown={(e) => e.stopPropagation()}
+            onClick={(e) => e.stopPropagation()}
+            onChange={(event) => {
+              dispatch(
+                setBaseParams({
+                  splitIndex,
+                  params: {
+                    moverPhaseY: clamp01(Number(event.target.value)),
+                  },
+                })
+              )
+            }}
+          />
+          <PhaseValue>{formatPhaseDegrees(livePhaseY)}</PhaseValue>
+        </PhaseRow>
+        {evenSpreadDegrees !== null && (
+          <PhaseHint>
+            {`${evenSpreadDegrees}° spreads ${moverCount} movers evenly`}
+          </PhaseHint>
+        )}
           </>
         ) : null}
       </MoverControls>
@@ -401,6 +486,31 @@ const SpreadInput = styled.input`
     border: 1px solid #000a;
     background: #d8e6ff;
   }
+`
+
+const PhaseRow = styled.div`
+  display: grid;
+  grid-template-columns: 1.6rem minmax(0, 1fr) 2.1rem;
+  align-items: center;
+  gap: 0.22rem;
+`
+
+const PhaseLabel = styled.div`
+  font-size: 0.58rem;
+  color: ${(props) => props.theme.colors.text.secondary};
+`
+
+const PhaseValue = styled.div`
+  font-size: 0.58rem;
+  color: ${(props) => props.theme.colors.text.secondary};
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+`
+
+const PhaseHint = styled.div`
+  font-size: 0.55rem;
+  color: #93a4bb;
+  margin-top: 0.14rem;
 `
 
 const RadioGroup = styled.div`

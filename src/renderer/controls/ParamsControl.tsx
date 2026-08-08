@@ -58,6 +58,8 @@ const moverBundleParams = [
   'moverSpread',
   'moverMirrorX',
   'moverMirrorY',
+  'moverPhaseX',
+  'moverPhaseY',
   'moverMode',
 ] as const
 
@@ -335,6 +337,8 @@ export default function ParamsControl({ splitIndex }: Params) {
       baseParams.moverSpread !== undefined ||
       baseParams.moverMirrorX !== undefined ||
       baseParams.moverMirrorY !== undefined ||
+      baseParams.moverPhaseX !== undefined ||
+      baseParams.moverPhaseY !== undefined ||
       baseParams.moverMode !== undefined
     if (!hasAnyMoverAxisParam) return
 
@@ -345,7 +349,9 @@ export default function ParamsControl({ splitIndex }: Params) {
       baseParams.moverFloorLock === undefined ||
       baseParams.moverSpread === undefined ||
       baseParams.moverMirrorX === undefined ||
-      baseParams.moverMirrorY === undefined
+      baseParams.moverMirrorY === undefined ||
+      baseParams.moverPhaseX === undefined ||
+      baseParams.moverPhaseY === undefined
     if (!missingMoverControls) return
 
     dispatch(
@@ -358,6 +364,8 @@ export default function ParamsControl({ splitIndex }: Params) {
           moverSpread: baseParams.moverSpread ?? 0,
           moverMirrorX: baseParams.moverMirrorX ?? 0,
           moverMirrorY: baseParams.moverMirrorY ?? 0,
+          moverPhaseX: baseParams.moverPhaseX ?? 0,
+          moverPhaseY: baseParams.moverPhaseY ?? 0,
           moverMode: baseParams.moverMode ?? 0,
         },
       })
