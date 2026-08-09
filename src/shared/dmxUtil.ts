@@ -823,8 +823,7 @@ export function getDmxValue(
       return combined
     }
     case 'master': {
-      // Fixture master dimmer follows the global master + split brightness only,
-      // not spatial X/Y pad windows (those gate RGB/aux emitters per subfixture).
+      // Fixture master dimmer follows the global master + split brightness.
       //
       // The randomizer is a different matter. Colour channels normally carry it, but a
       // fixture that dims through this channel and has no colour channels (colour wheel,
@@ -834,7 +833,19 @@ export function getDmxValue(
         fixture.dimmerAppliesRandomizer === true
           ? applyRandomization(1, randomizerLevel, getParam(params, 'randomize'))
           : 1
-      const level = master * getParam(params, 'brightness') * randomizerScale
+      // The X/Y position window is the same story: those same fixtures have no
+      // emitter partition to gate them, so without this the pad does nothing to
+      // them. Fixtures whose emitters already gate per subfixture are not flagged.
+      const windowScale =
+        fixture.dimmerAppliesWindow === true
+          ? getWindowMultiplier2D(
+              fixture.window,
+              movingWindow,
+              getParam(params, 'positionFeather')
+            )
+          : 1
+      const level =
+        master * getParam(params, 'brightness') * randomizerScale * windowScale
       if (ch.isOnOff) {
         return level > 0.5 ? ch.max : ch.min
       } else {
@@ -1516,6 +1527,21 @@ export function flatten_fixture(
     }
   }
 
+  // Position rides the intensity carrier for the same reason, with one wrinkle:
+  // colour emitters gate on their own subfixture window, which is finer than the
+  // fixture-level window a dimmer would apply. So the dimmer only takes the window
+  // over when no emitter partition is carrying it — a plain dimmer, or a head that
+  // colours through a wheel and dims through master. Otherwise it would land twice
+  // and the fixture would fade out early at the edges of the pad.
+  if (
+    flattened.some(partitionHasMasterChannel) &&
+    !flattened.some(partitionAppliesEmitterWindow)
+  ) {
+    for (const partition of flattened) {
+      partition.dimmerAppliesWindow = true
+    }
+  }
+
   // Only return fixtures that actually have channels.
   // This improves the behavior of the randomizer engine.
   return flattened
@@ -1534,6 +1560,14 @@ function partitionHasChannelType(
 
 function partitionHasMasterChannel(fixture: FlattenedFixture): boolean {
   return partitionHasChannelType(fixture, 'master')
+}
+
+/** True when this partition's colour channels are what apply the position window. */
+function partitionAppliesEmitterWindow(fixture: FlattenedFixture): boolean {
+  return (
+    partitionHasChannelType(fixture, 'color') &&
+    !partitionBrightnessUsesMasterChannel(fixture)
+  )
 }
 
 export function flatten_fixtures(

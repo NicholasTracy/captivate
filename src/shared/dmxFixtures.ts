@@ -4100,6 +4100,13 @@ export type FlattenedFixture = {
    * it (colour-wheel heads, plain dimmers) so exactly one channel randomizes.
    */
   dimmerAppliesRandomizer?: boolean
+  /**
+   * True when this partition's master/dimmer channel is what applies the position
+   * window. Set by `flatten_fixture` only for fixtures with no colour emitter to
+   * gate (colour-wheel heads, plain dimmers) — emitters gate per subfixture, which
+   * is finer, so the dimmer must not double up on them.
+   */
+  dimmerAppliesWindow?: boolean
   channels: [number, FixtureChannel][]
   window: Window2D_t
   groups: string[]
