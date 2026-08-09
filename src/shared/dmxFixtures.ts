@@ -4100,12 +4100,6 @@ export type FlattenedFixture = {
    * it (colour-wheel heads, plain dimmers) so exactly one channel randomizes.
    */
   dimmerAppliesRandomizer?: boolean
-  /**
-   * True when the fixture has a shutter/strobe channel, so it strobes in hardware and
-   * the emitters must not also be gated in software. Set by `flatten_fixture` on every
-   * partition, since the shutter and the emitters can land in different ones.
-   */
-  hasStrobeChannel?: boolean
   channels: [number, FixtureChannel][]
   window: Window2D_t
   groups: string[]

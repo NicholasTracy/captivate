@@ -508,6 +508,16 @@ function anyStrobeMaskEnabled(params: Params): boolean {
   )
 }
 
+function isStrobePulseOpen(params: Params, timeState: TimeState): boolean {
+  const strobeAmount = getParam(params, 'strobe')
+  if (strobeAmount <= 0.001) return true
+
+  // Map strobe amount to pulses per beat so strobe speed follows timeline tempo.
+  const pulsesPerBeat = lerp(0.5, 24.0, strobeAmount)
+  const phase = (timeState.beats * pulsesPerBeat) % 1.0
+  return phase < 0.5
+}
+
 const SYNTHETIC_STROBE_OFF_THRESHOLD = 0.02
 const SYNTHETIC_STROBE_MIN_HZ = 0.5
 const DEFAULT_SYNTHETIC_STROBE_FRAME_RATE_HZ = 30
@@ -740,13 +750,9 @@ function shouldOutputColorChannel(
   params: Params,
   timeState: TimeState,
   kind: ColorKind,
-  syntheticStrobeFrameRateHz: number,
-  fixture: FlattenedFixture
+  syntheticStrobeFrameRateHz: number
 ): boolean {
   if (!isStrobeMaskEnabled(params, kind)) return true
-  // Fixtures with a shutter strobe in hardware. Blinking the emitters here as well
-  // would fight it — two strobes at different rates on the same head.
-  if (fixture.hasStrobeChannel === true) return true
   return isSyntheticStrobePulseOpen(params, timeState, syntheticStrobeFrameRateHz)
 }
 
@@ -842,8 +848,7 @@ export function getDmxValue(
           params,
           timeState,
           kind,
-          syntheticStrobeFrameRateHz,
-          fixture
+          syntheticStrobeFrameRateHz
         )
       ) {
         return 0
@@ -871,21 +876,12 @@ export function getDmxValue(
     }
     case 'strobe': {
       const strobeAmount = getParam(params, 'strobe')
-      if (
-        strobeAmount <= SYNTHETIC_STROBE_OFF_THRESHOLD ||
-        !anyStrobeMaskEnabled(params)
-      ) {
+      if (strobeAmount <= 0.001 || !anyStrobeMaskEnabled(params)) {
         return ch.default_solid
       }
-      // A shutter channel is a *setting*, not a gate: the fixture runs the strobe from
-      // whatever value it is given. Toggling this between solid and strobe every frame
-      // restarted the fixture's own strobe continuously. Hold a value instead, swept
-      // across the definition's solid → strobe anchors so the slider still sets rate.
-      const rate = clampNormalized(
-        (strobeAmount - SYNTHETIC_STROBE_OFF_THRESHOLD) /
-          (1 - SYNTHETIC_STROBE_OFF_THRESHOLD)
-      )
-      return Math.round(lerp(ch.default_solid, ch.default_strobe, rate))
+      return isStrobePulseOpen(params, timeState)
+        ? ch.default_strobe
+        : ch.default_solid
     }
     case 'axis':
       if (ch.dir === 'x') {
@@ -1520,14 +1516,6 @@ export function flatten_fixture(
     }
   }
 
-  // Channel-family partitioning can put the shutter and the emitters in different
-  // partitions, so record on all of them whether this fixture strobes in hardware.
-  if (flattened.some(partitionHasStrobeChannel)) {
-    for (const partition of flattened) {
-      partition.hasStrobeChannel = true
-    }
-  }
-
   // Only return fixtures that actually have channels.
   // This improves the behavior of the randomizer engine.
   return flattened
@@ -1546,10 +1534,6 @@ function partitionHasChannelType(
 
 function partitionHasMasterChannel(fixture: FlattenedFixture): boolean {
   return partitionHasChannelType(fixture, 'master')
-}
-
-function partitionHasStrobeChannel(fixture: FlattenedFixture): boolean {
-  return partitionHasChannelType(fixture, 'strobe')
 }
 
 export function flatten_fixtures(

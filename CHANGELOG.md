@@ -23,13 +23,6 @@
 
 ### Fixes
 
-- Strobe now sets a value on a fixture's shutter channel instead of flicking it between
-  solid and strobe every frame. A shutter is a setting, not a gate — toggling it kept
-  restarting the fixture's own strobe. The slider sweeps the fixture definition's
-  solid → strobe anchors, so it still sets the rate, and the fixture runs the strobe.
-  Fixtures that have a shutter no longer get their emitters blinked in software as well
-  (that was two strobes at different rates on one head); fixtures without one keep the
-  software strobe unchanged.
 - Mover calibration is now stored **per fixture** instead of per fixture type. Aim
   references (home / front / back / up / down) depend on where a head is rigged, so
   calibrating one mover moved every other fixture of the same model. A fixture with no
