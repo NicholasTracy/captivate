@@ -11,3 +11,4 @@
 *.woff  binary
 *.woff2 binary
 *.db filter=lfs diff=lfs merge=lfs -text
+assets/captivate_fixtures.db filter=lfs diff=lfs merge=lfs -text

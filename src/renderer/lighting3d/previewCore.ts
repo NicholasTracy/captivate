@@ -37,6 +37,10 @@ import type {
 } from '../pages/lightingPreviewTypes'
 import { METERS_PER_FOOT, type StageDimensions } from '../../shared/stage'
 import { mapAxisPhysicalDmxToNormalized } from '../../shared/dmxUtil'
+import {
+  MOVER_MODE_TANDEM,
+  parseMoverModeFromParams,
+} from '../../shared/moverPadTargets'
 import type { LightingRendererCapabilities } from './webglFallback'
 export type BeamConeGroupLayout = 'spot' | 'linear-x'
 
@@ -683,9 +687,7 @@ export function stageHeightFromStage(stage: StageDimensions): number {
 }
 
 export function parseMoverMode(params: Params): number {
-  const raw = Number(params.moverMode ?? 0)
-  if (!Number.isFinite(raw)) return 0
-  return Math.max(0, Math.min(2, Math.round(raw)))
+  return parseMoverModeFromParams(params)
 }
 
 export function colorForGroup(groupName: string): THREE.Color {
@@ -1858,10 +1860,13 @@ export function buildTargets(
       let targetNormX = baseX
       let targetNormY = baseY
 
-      if (moverMode === 1) {
+      if (moverMode === MOVER_MODE_TANDEM) {
         targetNormX = baseX + (relX - 0.5) * spread
         targetNormY = baseY + (relY - 0.5) * spread
-      } else if (moverMode === 2) {
+      }
+
+      // Mirroring layers on whatever aim the fixture already has, in any mode.
+      if (mirrorLeftRight || mirrorTopBottom) {
         const isRight = isRightFlags[fixtureIndex] === true
         const isBottom = isBottomFlags[fixtureIndex] === true
 

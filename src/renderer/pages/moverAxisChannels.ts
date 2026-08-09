@@ -100,8 +100,8 @@ export function buildMoverAxisChannelPlans(
       panMax,
       tiltMin,
       tiltMax,
-      panCalibration: row.fixtureType.moverCalibration?.pan,
-      tiltCalibration: row.fixtureType.moverCalibration?.tilt,
+      panCalibration: row.moverCalibration.pan,
+      tiltCalibration: row.moverCalibration.tilt,
     }
   })
 }

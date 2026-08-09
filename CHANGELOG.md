@@ -6,8 +6,55 @@
 
 - Movers: **phase-offset follow**. New `moverPhaseX` / `moverPhaseY` params (0–360° per
   fixture) stagger each mover's pan/tilt modulation along the LFO cycle, so a move rolls
-  across the rig instead of firing in unison. Fixture order is DMX address for now; both
-  sliders live in the Advanced Movers panel and can themselves be driven by an LFO.
+  across the rig instead of firing in unison. Both sliders live in the Advanced Movers
+  panel and can themselves be driven by an LFO.
+- Movers tab: per-fixture **Order** column setting the phase-offset follow sequence, with
+  Number Order / Reset Order. Blank follows DMX address, so existing projects are
+  unchanged.
+- Movers: **mirroring is now a modifier, not a mode**. Mirror L/R and T/B stack on Follow,
+  Tandem, and phase-offset follow instead of being an exclusive third pattern, so a
+  tandem fan or a phase wave can be mirrored. Mover Pattern is now Follow / Tandem.
+  Projects saved before this (`PROJECT_SAVE_VERSION` 8, `AUTOSAVE_VERSION` 5) are
+  migrated on load so their output is unchanged.
+- Movers: phase-offset follow now walks **per phase group** — one mover group, and within
+  it one mirror half per mirrored axis — instead of one wave across the whole split. A
+  mirrored line of 6 runs 0,1,2 down each side of 3, with the mirrored side reversed so
+  the timing is symmetric about the mirror axis, not just the aim.
+
+### Fixes
+
+- Strobe now sets a value on a fixture's shutter channel instead of flicking it between
+  solid and strobe every frame. A shutter is a setting, not a gate — toggling it kept
+  restarting the fixture's own strobe. The slider sweeps the fixture definition's
+  solid → strobe anchors, so it still sets the rate, and the fixture runs the strobe.
+  Fixtures that have a shutter no longer get their emitters blinked in software as well
+  (that was two strobes at different rates on one head); fixtures without one keep the
+  software strobe unchanged.
+- Mover calibration is now stored **per fixture** instead of per fixture type. Aim
+  references (home / front / back / up / down) depend on where a head is rigged, so
+  calibrating one mover moved every other fixture of the same model. A fixture with no
+  calibration of its own still falls back to the type's, so existing projects are
+  unchanged until a head is calibrated.
+- Mover calibration preview now lights the head it is previewing. With the transport
+  stopped every other channel sits at its default — dimmer at `min`, shutter closed — so
+  the head aimed correctly but stayed dark and there was nothing to sight along.
+- Randomizer: a split now shows **one slot per fixture**. `flatten_fixture` splits a
+  fixture into channel-family partitions (RGB / white / the rest), and slots were counted
+  per partition while being consumed per fixture — so a 2-mover split drew 4 bars and left
+  2 of them permanently dark. All of a fixture's emitters now share its slot, so they dim
+  together.
+- Randomizer now runs on the **dimmer** for any fixture that has one, instead of only on
+  colour channels. A moving head dims through its master, and a movers split usually
+  carries no colour params at all, so the randomizer had nothing to act on and appeared
+  dead. `flatten_fixture` marks the dimmer as the carrier whenever a fixture has a master
+  channel and the emitter channels then skip it, so it is applied exactly once. Fixtures
+  with no dimmer (RGB-only pars) still randomize through colour as before.
+- Search For Fixture Online no longer trips GitHub's `429` / rate-limit error while
+  browsing. Each library now loads a single index instead of one directory listing per
+  manufacturer: QLC+ uses its published `FixturesMap.xml` over `raw.githubusercontent.com`
+  and makes **no** API calls at all, while Open Fixture Library and the Captivate
+  Community Library make one each. Switching manufacturers is also instant, and the
+  rate-limit message now says when the limit resets.
 
 ## 1.1.3
 

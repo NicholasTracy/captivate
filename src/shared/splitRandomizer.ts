@@ -33,15 +33,32 @@ export function countLedRandomizerSlots(
   )
 }
 
-/** Ordered DMX fixtures that own randomizer slots for a split (must match engine consume). */
+/**
+ * Ordered DMX fixtures that own randomizer slots for a split (must match engine consume).
+ *
+ * One slot per **physical** fixture. `flatten_fixture` splits a fixture into channel-family
+ * partitions (RGB / white / everything else), and every partition resolves to the same
+ * identity key — so counting partitions inflated the slot array (a 2-mover split showed 4)
+ * and left the extra slots permanently dark. Sharing one slot is also the behavior you
+ * want: a fixture's emitters dim together rather than drifting apart.
+ */
 export function getDmxRandomizerFixtures(
   fixtures: FlattenedFixture[],
   sceneGroups: SceneGroups,
   intensityCeiling: number
 ): FlattenedFixture[] {
-  return getFixturesInGroups(fixtures, sceneGroups).filter(
-    (fixture) => fixture.intensity <= intensityCeiling
-  )
+  const seen = new Set<string>()
+  const owners: FlattenedFixture[] = []
+
+  for (const fixture of getFixturesInGroups(fixtures, sceneGroups)) {
+    if (fixture.intensity > intensityCeiling) continue
+    const key = flattenedFixtureIdentityKey(fixture)
+    if (seen.has(key)) continue
+    seen.add(key)
+    owners.push(fixture)
+  }
+
+  return owners
 }
 
 export function countDmxRandomizerSlots(

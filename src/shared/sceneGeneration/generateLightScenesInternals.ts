@@ -478,7 +478,7 @@ function recipeMoverShowcase(ctx: SceneBuildContext, mode: 'sweep' | 'tandem' | 
     mode === 'tandem'
       ? { moverMode: 1, moverSpread: 0.42, moverFloorLock: 1 }
       : mode === 'mirror'
-        ? { moverMode: 2, moverMirrorX: 1, moverMirrorY: 1, moverFloorLock: 1 }
+        ? { moverMode: 0, moverMirrorX: 1, moverMirrorY: 1, moverFloorLock: 1 }
         : mode === 'peak'
           ? {
               moverMode: 1,

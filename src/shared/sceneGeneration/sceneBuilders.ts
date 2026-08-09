@@ -655,7 +655,8 @@ export function attachMoverAwareness(
     moverSplitScene.baseParams.moverMode = 1
     moverSplitScene.baseParams.moverSpread = 0.35
   } else if (scene.epicness >= 0.72) {
-    moverSplitScene.baseParams.moverMode = 2
+    // Mirror is a modifier now, so it rides on a plain Follow aim.
+    moverSplitScene.baseParams.moverMode = 0
     moverSplitScene.baseParams.moverMirrorX = 1
   }
 

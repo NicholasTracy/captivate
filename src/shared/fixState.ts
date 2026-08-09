@@ -55,6 +55,7 @@ import {
   normalizeFixtureGroupList,
   syncFixtureGroupCatalog,
 } from './fixtureGroups'
+import { normalizeMoverPhaseOrderValue } from './moverPhaseFollow'
 import { normalizeStageDimensions } from './stage'
 import { LfoShape, normalizeLfoShape } from './oscillator'
 import { snapLfoPeriodToUi } from './lfoPeriod'
@@ -843,6 +844,13 @@ export function fixDmxState(dmx: DmxState) {
   })[]) {
     ensureFixtureId(fixture)
 
+    // Per-fixture calibration is optional; unset falls back to the fixture type's.
+    if (fixture.moverCalibration !== undefined) {
+      fixture.moverCalibration = normalizeMoverCalibrationValues(
+        fixture.moverCalibration
+      )
+    }
+
     if (typeof fixture.name === 'string') {
       fixture.name = fixture.name.trim()
       if (fixture.name.length === 0) {
@@ -936,6 +944,23 @@ export function fixDmxState(dmx: DmxState) {
   }
 
   dmx.moverGroupByFixtureId = moverGroupByFixtureId
+
+  // Phase-offset follow order. Absent on projects saved before the feature; unset
+  // fixtures simply follow DMX address, so there is nothing to backfill.
+  const rawPhaseOrder =
+    (
+      dmx as DmxState & {
+        moverPhaseOrderByFixtureId?: { [fixtureId: string]: unknown }
+      }
+    ).moverPhaseOrderByFixtureId ?? {}
+  const moverPhaseOrderByFixtureId: { [fixtureId: string]: number } = {}
+  for (const [fixtureId, value] of Object.entries(rawPhaseOrder)) {
+    if (!validFixtureIds.has(fixtureId)) continue
+    const order = normalizeMoverPhaseOrderValue(value)
+    if (order === undefined) continue
+    moverPhaseOrderByFixtureId[fixtureId] = order
+  }
+  dmx.moverPhaseOrderByFixtureId = moverPhaseOrderByFixtureId
 
   if (
     dmx.activeFixture !== null &&

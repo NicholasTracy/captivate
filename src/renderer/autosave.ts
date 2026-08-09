@@ -9,6 +9,7 @@ import ipcChannels from '../shared/ipc_channels'
 import AutoSavedVal, { printTimePassed } from './AutoSavedVal'
 import defaultState from './redux/defaultState'
 import { migrateLegacyFixturePersistedJson } from '../shared/dmxFixtures'
+import { migrateExclusiveMoverModes } from '../shared/moverPadTargets'
 import { countProjectContent } from '../shared/projectPersistenceSummary'
 import {
   logProjectPersistence,
@@ -33,8 +34,11 @@ import { runPersistenceBusy } from './project/projectPersistenceBusy'
 import { setProjectWorkspace } from './redux/guiSlice'
 
 const AUTOSAVE_SCHEMA = 'captivate.autosave'
-const AUTOSAVE_VERSION = 4
+/** 5: mover mirroring became a modifier composing with Follow / Tandem. */
+const AUTOSAVE_VERSION = 5
 const MIN_SUPPORTED_AUTOSAVE_VERSION = 3
+/** First version whose light scenes already treat mirroring as a modifier. */
+const MOVER_MIRROR_MODIFIER_AUTOSAVE_VERSION = 5
 const FILE_AUTOSAVE_INTERVAL_MS = 15000
 
 interface VersionedAutoSaveState {
@@ -519,6 +523,12 @@ function parseVersionedAutoSaveState(raw: unknown): {
     state.dmx = JSON.parse(
       migrateLegacyFixturePersistedJson(JSON.stringify(state.dmx))
     ) as CleanReduxState['dmx']
+  }
+  if (
+    version < MOVER_MIRROR_MODIFIER_AUTOSAVE_VERSION &&
+    state.control?.light !== undefined
+  ) {
+    migrateExclusiveMoverModes(state.control.light)
   }
 
   return {

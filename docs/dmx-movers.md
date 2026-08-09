@@ -77,11 +77,24 @@ socket (`ArtNetManager`).
 Operator aim comes from the scene XY pad (`xAxis` / `yAxis`) and optional
 Advanced Movers controls:
 
-| Mode (`moverMode`) | Behavior |
-|--------------------|----------|
+Aim is built in layers, not picked from a menu. `moverMode` chooses the **base
+pattern**; mirroring and phase offset are **modifiers** that stack on whatever it
+produced.
+
+| Base pattern (`moverMode`) | Behavior |
+|----------------------------|----------|
 | 0 Follow | Shared aim (follow override can force this) |
 | 1 Tandem | Group members spread around the pad; max spread **0.65** |
-| 2 Mirror | Mirror left/right and/or top/bottom within the group |
+| ~~2 Mirror~~ | Legacy exclusive mode. Folds to Follow; the mirror flags carry it |
+
+| Modifier | Behavior |
+|----------|----------|
+| `moverMirrorX` / `moverMirrorY` | Folds the right-hand / lower movers around the pad center |
+| `moverPhaseX` / `moverPhaseY` | Staggers each mover along the LFO cycle (see below) |
+
+Order of application is base aim → phase offset → tandem spread → mirror, so a
+mirrored fixture reflects the aim it actually had. Follow override is the one thing
+that wins outright: a pinned group ignores both modifiers.
 
 With **Advanced** off, every mover in the split gets the same base aim (no
 group/tandem/mirror/phase). With Advanced on, `resolveMoverPadTargetsForGroup`
@@ -96,14 +109,66 @@ Both are normal 0–1 params, so an LFO can drive the stagger itself.
 | Aspect | Behavior |
 |--------|----------|
 | Slider range | 0–1 = **0–360° per mover** (`MOVER_PHASE_MAX_DEGREES`) |
-| Fixture order | DMX address — universe first, then start channel |
-| Rung 0 | First mover in that order keeps the split aim (matches the pad cursor) |
+| Fixture order | Movers tab **Order** column, falling back to DMX address |
+| Phase group | One mover group, and within it one mirror half per mirrored axis |
+| Rung 0 | First mover of each phase group keeps the split aim |
 | Axes | Pan and tilt are independent; equal steps share one evaluation |
 | Interaction | Composes with tandem / mirror — the offset replaces each fixture's aim *before* spread and mirroring |
 | Follow override | Wins; a pinned group ignores phase offset |
 
-`360 / moverCount` spreads a split evenly (the UI shows this hint). Offsets past
+#### Phase groups
+
+Rungs restart inside each phase group rather than running once across the split, so
+mirroring splits the wave instead of flipping half of a global one. A mirrored line of
+six walks `0,1,2` down each side of three; unmirrored it walks `0…5` across all six.
+
+The mirrored half also runs its sequence **backwards**, so a fixture and its reflection
+share a rung and the whole rig is symmetric about the mirror axis — the timing mirrors
+along with the aim. Mirroring both axes reverses twice, i.e. not at all.
+
+```text
+line of 6, phase 60°, sin on pan   ->  253  207   81    1   47  173
+same line + Mirror L/R             ->  253  207   81 | 173   47    1
+                                       rungs 0,1,2     rungs 2,1,0, aim mirrored
+```
+
+Because a mover group is the unit, a split holding two mover groups gives each its own
+wave — the same scoping tandem and mirror already use.
+
+`360 / moverCount` spreads a phase group evenly (the UI shows this hint). Offsets past
 180° read as the wave running the other way.
+
+#### Order
+
+**Movers** tab (Advanced) gives every mover an **Order** box:
+
+- Blank = follow DMX address (universe first, then start channel). A rig that never
+  touches this behaves exactly as if the column did not exist.
+- A number pins that mover's place; lower goes first. Anything still blank follows
+  all numbered movers, among themselves in DMX-address order.
+- **Number Order** stamps 1…N onto the current sequence so a couple of movers can be
+  swapped without typing every row; **Reset Order** clears back to address order.
+- The `#` beside each box is the mover's place across the whole rig. Phase walks the
+  same sequence but restarts per phase group, so a split does not always start at #1.
+
+Order lives in `dmx.moverPhaseOrderByFixtureId` (project state, shared by every
+split). Every consumer resolves it through `getMoverPhaseOrderEntries()` — the tab's
+`#` badge via `moverPhaseOrderIndexes()`, and the engine and pad preview via
+`resolveMoverPhaseRungs()`, which adds the phase-group partitioning.
+
+### Legacy mover modes
+
+Mirroring used to require `moverMode: 2`, which meant tandem spread and mirroring
+could never run together, and mirror flags left behind by an earlier mode selection
+sat inert. Now that they compose, those stale flags would silently start mirroring, so
+`migrateExclusiveMoverModes` rewrites old scenes to the (mode, flags) pair that
+reproduces exactly what they used to output.
+
+It is **version-gated at the load boundary** — `PROJECT_SAVE_VERSION` 8 and
+`AUTOSAVE_VERSION` 5 — not run from `fixLightScenes`. Running it unconditionally would
+wipe a deliberate Follow + Mirror every time a project was reopened. At runtime
+`normalizeMoverMode` folds a stored `2` to Follow, so an unmigrated scene still behaves
+correctly.
 
 Mechanically, `getOutputParamsAtPhaseOffset` re-runs the split's modulation matrix
 with every **wave** LFO slid along its own cycle (`Lfo.phaseShift`), applied after

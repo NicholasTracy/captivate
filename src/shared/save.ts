@@ -5,6 +5,7 @@ import { MixerState } from 'renderer/redux/mixerSlice'
 import type { Page } from './pages'
 import type { VisualizerStreamingSettings } from './visualizerStreaming'
 import { migrateLegacyFixturePersistedJson } from './dmxFixtures'
+import { migrateExclusiveMoverModes } from './moverPadTargets'
 import type { LaserProjectState } from '../renderer/laser/laserProjectState'
 import { migrateLaserProjectState } from '../renderer/laser/laserProjectState'
 
@@ -47,8 +48,14 @@ export interface SaveInfo {
 }
 
 export const PROJECT_SAVE_SCHEMA = 'captivate.project'
-export const PROJECT_SAVE_VERSION = 7
+/**
+ * 8: mover mirroring became a modifier that composes with Follow / Tandem instead of
+ * an exclusive `moverMode`. Older files need `migrateExclusiveMoverModes`.
+ */
+export const PROJECT_SAVE_VERSION = 8
 const MIN_SUPPORTED_PROJECT_SAVE_VERSION = 5
+/** First version whose light scenes already treat mirroring as a modifier. */
+const MOVER_MIRROR_MODIFIER_SAVE_VERSION = 8
 
 export interface VersionedProjectSave {
   schema: string
@@ -271,6 +278,11 @@ export function parseVersionedProjectSave(raw: unknown): ParsedProjectSave {
   if (state.laser !== undefined) {
     state.laser = migrateLaserProjectState(state.laser)
     normalization.push('migrate_laser')
+  }
+  if (version < MOVER_MIRROR_MODIFIER_SAVE_VERSION && state.light !== undefined) {
+    if (migrateExclusiveMoverModes(state.light)) {
+      normalization.push('migrate_mover_mirror_modifier')
+    }
   }
 
   return {

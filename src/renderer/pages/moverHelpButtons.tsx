@@ -143,9 +143,50 @@ export function MoverFloorBoundsHelpButton() {
 export function MoverPatternHelpButton() {
   return (
     <FieldHelpButton ariaLabel="How mover patterns work">
-      Follow: all movers aim at the same pad point. Tandem: copies spaced along the
-      aim line. Mirror: flips pan or tilt for symmetric pairs.
+      The base aim every mover starts from. Follow: all movers aim at the same pad
+      point. Tandem: they fan out along the aim line by Tandem Distance. Mirror and
+      Phase Offset then layer on top of whichever you pick.
     </FieldHelpButton>
+  )
+}
+
+export function MoverMirrorHelpButton() {
+  return (
+    <FieldHelpButton ariaLabel="How mirroring works">
+      Folds the right-hand (L/R) or lower (T/B) movers around the pad center, so
+      symmetric pairs turn towards each other. Stacks on Follow, Tandem, and Phase
+      Offset. It also splits the phase wave: a mirrored line of 6 runs its own
+      sequence down each side of 3, reflected, instead of one wave across all six.
+    </FieldHelpButton>
+  )
+}
+
+export function MoverPhaseOrderHelpButton() {
+  return (
+    <SectionHelpButton ariaLabel="How mover order works">
+      <HelpTitle>Mover order</HelpTitle>
+      <HelpIntro>
+        The sequence phase-offset follow walks when it staggers pan/tilt across the
+        rig. Leave every Order blank and movers follow DMX address.
+      </HelpIntro>
+      <HelpList>
+        <li>
+          Type a number to pin a mover&apos;s place. Lower goes first; anything left
+          blank follows the numbered ones, still in DMX-address order.
+        </li>
+        <li>
+          <strong>Number Order</strong> writes 1…N using the current sequence so you
+          can swap a couple of movers instead of typing them all.
+        </li>
+        <li>
+          <strong>#</strong> is the mover&apos;s place across the whole rig. Phase walks
+          this same sequence but restarts inside each mover group — and inside each
+          mirrored half when Mirror is on — so a split does not always start at #1.
+          Order is shared by every split; the phase sliders live on the scene&apos;s
+          pan/tilt pad.
+        </li>
+      </HelpList>
+    </SectionHelpButton>
   )
 }
 
@@ -153,9 +194,11 @@ export function MoverPhaseOffsetHelpButton() {
   return (
     <FieldHelpButton ariaLabel="How phase offset follow works">
       Delays each mover&apos;s pan/tilt modulation by a slice of the LFO cycle, so the
-      move rolls across the rig instead of firing in unison. Movers are ordered by DMX
-      address; the first one keeps the pad aim. 0° is unison, 360° wraps back to unison.
-      Pan and tilt are independent, and both sliders can be driven by an LFO.
+      move rolls across the rig instead of firing in unison. The sequence restarts in
+      each mover group, and in each mirrored half when Mirror is on, so the first mover
+      of each keeps the pad aim. Set the sequence per fixture in the Movers tab (blank
+      follows DMX address). 0° is unison, 360° wraps back to unison. Pan and tilt are
+      independent, and both sliders can be driven by an LFO.
     </FieldHelpButton>
   )
 }

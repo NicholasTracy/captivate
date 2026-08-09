@@ -4,6 +4,7 @@ import {
   DmxValue,
   DMX_MAX_VALUE,
   FixtureChannel,
+  fixtureChannelLeafChannels,
   LeafFixtureChannel,
   Fixture,
   Universe,
@@ -14,8 +15,8 @@ import {
   AxisDir,
   DMX_MIN_VALUE,
   FlattenedFixture,
-  initMoverCalibration,
   isMoverFixtureType,
+  resolveMoverCalibration,
   mergeSubRelativeWindowWithEmitterCentroid,
   emittersForSubfixtureIndex,
   resolvedEmittersForFixtureType,
@@ -507,16 +508,6 @@ function anyStrobeMaskEnabled(params: Params): boolean {
   )
 }
 
-function isStrobePulseOpen(params: Params, timeState: TimeState): boolean {
-  const strobeAmount = getParam(params, 'strobe')
-  if (strobeAmount <= 0.001) return true
-
-  // Map strobe amount to pulses per beat so strobe speed follows timeline tempo.
-  const pulsesPerBeat = lerp(0.5, 24.0, strobeAmount)
-  const phase = (timeState.beats * pulsesPerBeat) % 1.0
-  return phase < 0.5
-}
-
 const SYNTHETIC_STROBE_OFF_THRESHOLD = 0.02
 const SYNTHETIC_STROBE_MIN_HZ = 0.5
 const DEFAULT_SYNTHETIC_STROBE_FRAME_RATE_HZ = 30
@@ -749,9 +740,13 @@ function shouldOutputColorChannel(
   params: Params,
   timeState: TimeState,
   kind: ColorKind,
-  syntheticStrobeFrameRateHz: number
+  syntheticStrobeFrameRateHz: number,
+  fixture: FlattenedFixture
 ): boolean {
   if (!isStrobeMaskEnabled(params, kind)) return true
+  // Fixtures with a shutter strobe in hardware. Blinking the emitters here as well
+  // would fight it — two strobes at different rates on the same head.
+  if (fixture.hasStrobeChannel === true) return true
   return isSyntheticStrobePulseOpen(params, timeState, syntheticStrobeFrameRateHz)
 }
 
@@ -824,7 +819,16 @@ export function getDmxValue(
     case 'master': {
       // Fixture master dimmer follows the global master + split brightness only,
       // not spatial X/Y pad windows (those gate RGB/aux emitters per subfixture).
-      const level = master * getParam(params, 'brightness')
+      //
+      // The randomizer is a different matter. Colour channels normally carry it, but a
+      // fixture that dims through this channel and has no colour channels (colour wheel,
+      // or a plain dimmer) had nothing applying it at all. `flatten_fixture` marks those
+      // fixtures so it lands here instead — once per fixture, never twice.
+      const randomizerScale =
+        fixture.dimmerAppliesRandomizer === true
+          ? applyRandomization(1, randomizerLevel, getParam(params, 'randomize'))
+          : 1
+      const level = master * getParam(params, 'brightness') * randomizerScale
       if (ch.isOnOff) {
         return level > 0.5 ? ch.max : ch.min
       } else {
@@ -838,7 +842,8 @@ export function getDmxValue(
           params,
           timeState,
           kind,
-          syntheticStrobeFrameRateHz
+          syntheticStrobeFrameRateHz,
+          fixture
         )
       ) {
         return 0
@@ -847,12 +852,8 @@ export function getDmxValue(
       const brightnessViaMaster = partitionBrightnessUsesMasterChannel(fixture)
       const outputScale = brightnessViaMaster
         ? 1
-        : getWindowRandomizerLevel(
-            params,
-            randomizerLevel,
-            fixture.window,
-            movingWindow
-          ) * master
+        : getEmitterWindowScale(params, fixture, randomizerLevel, movingWindow) *
+          master
 
       const dedicated = dedicatedColorParam(params, kind)
       if (dedicated !== null) {
@@ -870,12 +871,21 @@ export function getDmxValue(
     }
     case 'strobe': {
       const strobeAmount = getParam(params, 'strobe')
-      if (strobeAmount <= 0.001 || !anyStrobeMaskEnabled(params)) {
+      if (
+        strobeAmount <= SYNTHETIC_STROBE_OFF_THRESHOLD ||
+        !anyStrobeMaskEnabled(params)
+      ) {
         return ch.default_solid
       }
-      return isStrobePulseOpen(params, timeState)
-        ? ch.default_strobe
-        : ch.default_solid
+      // A shutter channel is a *setting*, not a gate: the fixture runs the strobe from
+      // whatever value it is given. Toggling this between solid and strobe every frame
+      // restarted the fixture's own strobe continuously. Hold a value instead, swept
+      // across the definition's solid → strobe anchors so the slider still sets rate.
+      const rate = clampNormalized(
+        (strobeAmount - SYNTHETIC_STROBE_OFF_THRESHOLD) /
+          (1 - SYNTHETIC_STROBE_OFF_THRESHOLD)
+      )
+      return Math.round(lerp(ch.default_solid, ch.default_strobe, rate))
     }
     case 'axis':
       if (ch.dir === 'x') {
@@ -1064,6 +1074,32 @@ export function getDmxValue(
     default:
       return DMX_DEFAULT_VALUE
   }
+}
+
+/**
+ * Window gate for an emitter partition. The randomizer is folded in only when the
+ * fixture has no dimmer to carry it — otherwise the master channel applies it, and
+ * doing it here as well would randomize the same fixture twice.
+ */
+function getEmitterWindowScale(
+  params: Params,
+  fixture: FlattenedFixture,
+  randomizerLevel: Normalized,
+  movingWindow: Window2D_t
+): Normalized {
+  const windowLevel = getWindowMultiplier2D(
+    fixture.window,
+    movingWindow,
+    getParam(params, 'positionFeather')
+  )
+  if (fixture.dimmerAppliesRandomizer === true) {
+    return windowLevel
+  }
+  return applyRandomization(
+    windowLevel,
+    randomizerLevel,
+    getParam(params, 'randomize')
+  )
 }
 
 export function getWindowRandomizerLevel(
@@ -1409,7 +1445,7 @@ export function flatten_fixture(
     )
 
   const moverCalibration = isMoverFixtureType(fixture_type)
-    ? fixture_type.moverCalibration ?? initMoverCalibration()
+    ? resolveMoverCalibration(fixture, fixture_type)
     : undefined
 
   const resolvedEmitters = resolvedEmittersForFixtureType(fixture_type)
@@ -1474,9 +1510,46 @@ export function flatten_fixture(
     .flatMap((fixtureItem) => partitionFlattenedFixtureByChannelFamily(fixtureItem))
     .filter((fixtureItem) => fixtureItem.channels.length > 0)
 
+  // The randomizer is an intensity effect, so it rides whatever channel actually
+  // controls intensity: the master/dimmer when the fixture has one, colour channels
+  // otherwise. Flagging every partition of the fixture keeps it applied exactly once —
+  // the dimmer partition applies it and the emitter partitions skip it.
+  if (flattened.some(partitionHasMasterChannel)) {
+    for (const partition of flattened) {
+      partition.dimmerAppliesRandomizer = true
+    }
+  }
+
+  // Channel-family partitioning can put the shutter and the emitters in different
+  // partitions, so record on all of them whether this fixture strobes in hardware.
+  if (flattened.some(partitionHasStrobeChannel)) {
+    for (const partition of flattened) {
+      partition.hasStrobeChannel = true
+    }
+  }
+
   // Only return fixtures that actually have channels.
   // This improves the behavior of the randomizer engine.
   return flattened
+}
+
+function partitionHasChannelType(
+  fixture: FlattenedFixture,
+  type: LeafFixtureChannel['type']
+): boolean {
+  return fixture.channels.some(([, channel]) =>
+    fixtureChannelLeafChannels(channel).some(
+      (leaf: LeafFixtureChannel) => leaf.type === type
+    )
+  )
+}
+
+function partitionHasMasterChannel(fixture: FlattenedFixture): boolean {
+  return partitionHasChannelType(fixture, 'master')
+}
+
+function partitionHasStrobeChannel(fixture: FlattenedFixture): boolean {
+  return partitionHasChannelType(fixture, 'strobe')
 }
 
 export function flatten_fixtures(

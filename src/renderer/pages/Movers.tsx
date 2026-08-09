@@ -21,21 +21,28 @@ import {
   MOVER_MAX_PAN_RANGE_DEG,
   MOVER_MIN_TILT_RANGE_DEG,
   MOVER_MAX_TILT_RANGE_DEG,
-  FixtureType,
   MoverBounds,
   MoverCalibration,
   initMoverBounds,
-  initMoverCalibration,
   MoverMountOrientation,
 } from '../../shared/dmxFixtures'
 import { useDmxSelector, useTypedSelector } from '../redux/store'
 import { useRealtimeSelector } from '../redux/realtimeStore'
 import {
+  autoNumberMoverPhaseOrder,
+  clearMoverPhaseOrder,
+  getMoverPhaseOrderEntries,
   setFixtureMoverBounds,
+  setFixtureMoverCalibration,
   setMoverGroupForFixture,
+  setMoverPhaseOrderForFixture,
   setFixtureMoverMountOrientation,
-  updateFixtureType,
 } from '../redux/dmxSlice'
+import {
+  MOVER_PHASE_ORDER_MAX,
+  moverPhaseOrderIndexes,
+  normalizeMoverPhaseOrderValue,
+} from '../../shared/moverPhaseFollow'
 import {
   clearMoverCalibrationOverride,
   setMoverCalibrationOverride,
@@ -68,6 +75,7 @@ import {
   MountOrientationHelpButton,
   MoverCalibrationDialogHelpButton,
   MoverGroupsHelpButton,
+  MoverPhaseOrderHelpButton,
   PanCalibrationHelpButton,
   TiltCalibrationHelpButton,
 } from './moverHelpButtons'
@@ -238,6 +246,17 @@ export default function MoversPage() {
     (state) => state.gui.moverAdvancedControlEnabled
   )
 
+  const moverPhaseOrderByFixtureId = useDmxSelector(
+    (dmx) => dmx.moverPhaseOrderByFixtureId
+  )
+  const moverPhaseOrderEntries = useDmxSelector(getMoverPhaseOrderEntries)
+  const moverPhaseOrderPositions = useMemo(
+    () => moverPhaseOrderIndexes(moverPhaseOrderEntries),
+    [moverPhaseOrderEntries]
+  )
+  const hasCustomPhaseOrder =
+    Object.keys(moverPhaseOrderByFixtureId).length > 0
+
   const moverGroupNames = useMemo(() => {
     const names = moverFixtures
       .map((row) => row.groupName.trim())
@@ -363,6 +382,16 @@ export default function MoversPage() {
     )
   }
 
+  function setMoverPhaseOrder(fixtureId: string, rawValue: string) {
+    dispatch(
+      setMoverPhaseOrderForFixture({
+        fixtureId,
+        // Empty / unparseable clears the pin and falls back to DMX address.
+        order: normalizeMoverPhaseOrderValue(rawValue) ?? null,
+      })
+    )
+  }
+
   function setMoverMountOrientation(
     fixtureId: string,
     orientation: MoverMountOrientation
@@ -389,31 +418,28 @@ export default function MoversPage() {
     )
   }
 
+  /**
+   * Calibration is stored per fixture. Aim references (home / front / back / up / down)
+   * depend on where a head is rigged, so writing them onto the fixture *type* moved every
+   * fixture of that model at once.
+   */
   function updateCalibration(
-    fixtureType: FixtureType,
+    row: MoverFixtureRow,
     updater: (current: MoverCalibration) => MoverCalibration,
     preview?: CalibrationPreview
   ) {
-    const current = fixtureType.moverCalibration ?? initMoverCalibration()
-    const nextCalibration = updater(current)
+    const nextCalibration = updater(row.moverCalibration)
 
     dispatch(
-      updateFixtureType({
-        ...fixtureType,
+      setFixtureMoverCalibration({
+        fixtureId: row.fixtureId,
         moverCalibration: nextCalibration,
       })
     )
 
-    if (calibrationFixtureRow?.fixtureType.id === fixtureType.id) {
-      const panDmx =
-        preview?.axis === 'pan' ? preview.dmx : nextCalibration.pan.home
-      const tiltDmx =
-        preview?.axis === 'tilt' ? preview.dmx : nextCalibration.tilt.home
-
-      if (calibrationFixtureRow !== null) {
-        setCalibrationOverridePreview(calibrationFixtureRow.fixtureId, panDmx, tiltDmx)
-      }
-    }
+    const panDmx = preview?.axis === 'pan' ? preview.dmx : nextCalibration.pan.home
+    const tiltDmx = preview?.axis === 'tilt' ? preview.dmx : nextCalibration.tilt.home
+    setCalibrationOverridePreview(row.fixtureId, panDmx, tiltDmx)
   }
 
   function updateMoverBounds(
@@ -437,7 +463,7 @@ export default function MoversPage() {
   }
 
   function openCalibration(row: MoverFixtureRow) {
-    const calibration = row.fixtureType.moverCalibration ?? initMoverCalibration()
+    const calibration = row.moverCalibration
     setCalibrationFixtureId(row.fixtureId)
     setCalibrationFixtureLabel(row.fixtureLabel)
     setCalibrationOverridePreview(
@@ -479,9 +505,32 @@ export default function MoversPage() {
           </PanelTitleRow>
           <PanelHint>
             {moverAdvancedControlEnabled
-              ? 'Rename groups to split or merge. Click a row to calibrate pan/tilt and floor bounds.'
+              ? 'Rename groups to split or merge. Click a row to calibrate pan/tilt and floor bounds. Order sets the phase-offset follow sequence — blank follows DMX address.'
               : 'Pan/tilt pads aim each mover directly. Set Upright or Hung to match how fixtures are rigged.'}
           </PanelHint>
+
+          {moverAdvancedControlEnabled && moverFixtures.length > 1 ? (
+            <PanelActions onClick={(event) => event.stopPropagation()}>
+              <Button
+                size="small"
+                variant="outlined"
+                onClick={() => dispatch(autoNumberMoverPhaseOrder())}
+                title="Write 1…N into Order using the current sequence, ready to nudge"
+              >
+                Number Order
+              </Button>
+              <Button
+                size="small"
+                variant="outlined"
+                disabled={!hasCustomPhaseOrder}
+                onClick={() => dispatch(clearMoverPhaseOrder())}
+                title="Clear all Order numbers and fall back to DMX address"
+              >
+                Reset Order
+              </Button>
+              <MoverPhaseOrderHelpButton />
+            </PanelActions>
+          ) : null}
 
           <PanelScroll>
             {moverFixtures.length === 0 && (
@@ -509,6 +558,34 @@ export default function MoversPage() {
                     {row.fixtureType.manufacturer || 'Custom fixture'}
                   </FixtureTypeText>
                 </FixtureMeta>
+
+                {moverAdvancedControlEnabled ? (
+                  <PhaseOrderEditor
+                    onClick={(event) => event.stopPropagation()}
+                    onMouseDown={(event) => event.stopPropagation()}
+                    title="Phase-offset follow order. Blank follows DMX address."
+                  >
+                    <PhaseOrderLabel>Order</PhaseOrderLabel>
+                    <PhaseOrderInput
+                      type="number"
+                      min={1}
+                      max={MOVER_PHASE_ORDER_MAX}
+                      step={1}
+                      placeholder="auto"
+                      value={moverPhaseOrderByFixtureId[row.fixtureId] ?? ''}
+                      onChange={(event: ChangeEvent<HTMLInputElement>) =>
+                        setMoverPhaseOrder(row.fixtureId, event.target.value)
+                      }
+                    />
+                    <PhaseOrderPosition>
+                      {moverPhaseOrderPositions.get(row.fixtureId) !== undefined
+                        ? `#${
+                            (moverPhaseOrderPositions.get(row.fixtureId) ?? 0) + 1
+                          }`
+                        : ''}
+                    </PhaseOrderPosition>
+                  </PhaseOrderEditor>
+                ) : null}
 
                 <GroupEditor
                   onClick={(event) => event.stopPropagation()}
@@ -833,7 +910,8 @@ export default function MoversPage() {
         <DialogTitle>
           <PopupTitleRow>
             <span>
-              Mover Calibration: {calibrationFixtureType?.name ?? ''}
+              Mover Calibration:{' '}
+              {calibrationFixtureLabel || calibrationFixtureType?.name || ''}
             </span>
             <MoverCalibrationDialogHelpButton />
           </PopupTitleRow>
@@ -874,20 +952,15 @@ export default function MoversPage() {
             </MountRow>
           )}
 
-          {calibrationFixtureType !== null && (
+          {calibrationFixtureRow !== null && (
             <CalibrationEditor
-              fixtureType={calibrationFixtureType}
-              isFixtureInverted={calibrationFixtureRow?.moverMountOrientation === 'inverted'}
+              calibration={calibrationFixtureRow.moverCalibration}
+              isFixtureInverted={calibrationFixtureRow.moverMountOrientation === 'inverted'}
               onUpdate={(updater, preview) =>
-                updateCalibration(calibrationFixtureType, updater, preview)
+                updateCalibration(calibrationFixtureRow, updater, preview)
               }
               onPreview={(preview) => {
-                if (calibrationFixtureRow === null) {
-                  return
-                }
-
-                const calibration =
-                  calibrationFixtureType.moverCalibration ?? initMoverCalibration()
+                const calibration = calibrationFixtureRow.moverCalibration
                 const panDmx =
                   preview.axis === 'pan' ? preview.dmx : calibration.pan.home
                 const tiltDmx =
@@ -930,12 +1003,12 @@ export default function MoversPage() {
 }
 
 function CalibrationEditor({
-  fixtureType,
+  calibration,
   isFixtureInverted,
   onUpdate,
   onPreview,
 }: {
-  fixtureType: FixtureType
+  calibration: MoverCalibration
   isFixtureInverted: boolean
   onUpdate: (
     updater: (current: MoverCalibration) => MoverCalibration,
@@ -943,7 +1016,6 @@ function CalibrationEditor({
   ) => void
   onPreview: (preview: CalibrationPreview) => void
 }) {
-  const calibration = fixtureType.moverCalibration ?? initMoverCalibration()
   const tiltForwardLabel = 'Tilt Forward'
   const tiltSecondaryField: 'down' | 'up' = isFixtureInverted ? 'down' : 'up'
   const tiltSecondaryLabel = isFixtureInverted ? 'Tilt Toward Floor' : 'Tilt Toward Ceiling'
@@ -1423,6 +1495,49 @@ const GroupEditor = styled.div`
   align-items: center;
   gap: 0.5rem;
   width: min(22rem, 100%);
+`
+
+const PhaseOrderEditor = styled.div`
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  flex: 0 0 auto;
+`
+
+const PhaseOrderLabel = styled.div`
+  font-size: 0.7rem;
+  color: ${(props) => props.theme.colors.text.secondary};
+`
+
+const PhaseOrderInput = styled.input`
+  width: 3.1rem;
+  font-size: 0.8rem;
+  padding: 0.2rem 0.3rem;
+  border-radius: 0.25rem;
+  border: 1px solid ${(props) => props.theme.colors.divider};
+  background: ${(props) => props.theme.colors.bg.darker};
+  color: ${(props) => props.theme.colors.text.primary};
+  text-align: center;
+
+  &::placeholder {
+    color: ${(props) => props.theme.colors.text.secondary};
+    opacity: 0.7;
+  }
+`
+
+const PhaseOrderPosition = styled.div`
+  font-size: 0.7rem;
+  color: ${(props) => props.theme.colors.text.secondary};
+  min-width: 1.9rem;
+  font-variant-numeric: tabular-nums;
+`
+
+const PanelActions = styled.div`
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-bottom: 0.6rem;
+  flex-wrap: wrap;
 `
 
 const RightColumn = styled.div`

@@ -15,6 +15,7 @@ import {
   syncCustomEmitterSubfixtureChannels,
   SubFixture,
   MoverBounds,
+  MoverCalibration,
   MoverMountOrientation,
   DMX_MIN_VALUE,
   DMX_MAX_VALUE,
@@ -32,6 +33,11 @@ import {
   syncFixtureGroupCatalog,
 } from '../../shared/fixtureGroups'
 import { clampNormalized } from '../../math/util'
+import {
+  moverPhaseOrderIndexes,
+  normalizeMoverPhaseOrderValue,
+  type MoverPhaseOrderEntry,
+} from '../../shared/moverPhaseFollow'
 import { defaultParamsList } from '../../shared/params'
 import { initLedState, LedState } from './ledState'
 import {
@@ -57,6 +63,8 @@ export interface DmxState {
   activeUniverse: number
   activeSubFixture: null | number
   moverGroupByFixtureId: { [fixtureId: string]: string }
+  /** Explicit phase-offset follow order per mover; unset = follow DMX address. */
+  moverPhaseOrderByFixtureId: { [fixtureId: string]: number }
   stage: StageDimensions
   lighting3d: Lighting3DSettings
   led: LedState
@@ -293,6 +301,7 @@ export function initDmxState(): DmxState {
     activeUniverse: 1,
     activeSubFixture: null,
     moverGroupByFixtureId: {},
+    moverPhaseOrderByFixtureId: {},
     stage: initStageDimensions(),
     lighting3d: initLighting3DSettings(),
     led: initLedState(),
@@ -584,6 +593,28 @@ function ensureMoverGroupForFixture(state: DmxState, fixture: Fixture) {
   }
 }
 
+/**
+ * Phase-order entries for every mover in the rig. Feed to {@link moverPhaseOrderIndexes}
+ * to get each mover's 0-based rung — the engine, the pad preview, and the Movers tab all
+ * resolve order through this one path.
+ */
+export function getMoverPhaseOrderEntries(dmx: DmxState): MoverPhaseOrderEntry[] {
+  const entries: MoverPhaseOrderEntry[] = []
+  for (const fixture of dmx.universe) {
+    const fixtureType = dmx.fixtureTypesByID[fixture.type]
+    if (fixtureType === undefined || !isMoverFixtureType(fixtureType)) continue
+    const fixtureId = typeof fixture.id === 'string' ? fixture.id.trim() : ''
+    if (fixtureId.length <= 0) continue
+    entries.push({
+      key: fixtureId,
+      universe: Math.max(1, Math.round(Number(fixture.universe) || 1)),
+      channel: Math.max(0, Math.round(Number(fixture.ch) || 0)),
+      order: dmx.moverPhaseOrderByFixtureId[fixtureId],
+    })
+  }
+  return entries
+}
+
 function isAtmosphereFixtureType(fixtureType: FixtureType): boolean {
   return fixtureType.channels
     .flatMap((channel) => fixtureChannelLeafChannels(channel))
@@ -668,6 +699,12 @@ function syncMoverState(state: DmxState) {
   for (const fixtureId of Object.keys(state.moverGroupByFixtureId)) {
     if (!validFixtureIds.has(fixtureId)) {
       delete state.moverGroupByFixtureId[fixtureId]
+    }
+  }
+
+  for (const fixtureId of Object.keys(state.moverPhaseOrderByFixtureId)) {
+    if (!validFixtureIds.has(fixtureId)) {
+      delete state.moverPhaseOrderByFixtureId[fixtureId]
     }
   }
 }
@@ -767,6 +804,7 @@ export const dmxSlice = createSlice({
       state.universe.splice(payload, 1)
       if (fixture?.id) {
         delete state.moverGroupByFixtureId[fixture.id]
+        delete state.moverPhaseOrderByFixtureId[fixture.id]
       }
       syncFixtureGroupCatalogState(state)
       syncMoverState(state)
@@ -1183,6 +1221,48 @@ export const dmxSlice = createSlice({
         }
       }
     },
+    setMoverPhaseOrderForFixture: (
+      state,
+      {
+        payload,
+      }: PayloadAction<{ fixtureId: string; order: number | null }>
+    ) => {
+      const order =
+        payload.order === null
+          ? undefined
+          : normalizeMoverPhaseOrderValue(payload.order)
+      if (order === undefined) {
+        delete state.moverPhaseOrderByFixtureId[payload.fixtureId]
+        return
+      }
+      state.moverPhaseOrderByFixtureId[payload.fixtureId] = order
+    },
+    /** Stamp 1..N onto every mover in its current phase order, so numbers can be nudged. */
+    autoNumberMoverPhaseOrder: (state) => {
+      const orderIndexByFixtureId = moverPhaseOrderIndexes(
+        getMoverPhaseOrderEntries(state)
+      )
+      for (const [fixtureId, index] of orderIndexByFixtureId) {
+        state.moverPhaseOrderByFixtureId[fixtureId] = index + 1
+      }
+    },
+    clearMoverPhaseOrder: (state) => {
+      state.moverPhaseOrderByFixtureId = {}
+    },
+    setFixtureMoverCalibration: (
+      state,
+      {
+        payload,
+      }: PayloadAction<{ fixtureId: string; moverCalibration: MoverCalibration }>
+    ) => {
+      const fixture = state.universe.find(
+        (candidate) => candidate.id === payload.fixtureId
+      )
+      if (fixture === undefined) {
+        return
+      }
+      fixture.moverCalibration = normalizeMoverCalibration(payload.moverCalibration)
+    },
     setFixtureMoverBounds: (
       state,
       {
@@ -1394,6 +1474,10 @@ export const {
   removeSubFixture,
   setActiveSubFixture,
   setMoverGroupForFixture,
+  setFixtureMoverCalibration,
+  setMoverPhaseOrderForFixture,
+  autoNumberMoverPhaseOrder,
+  clearMoverPhaseOrder,
   setFixtureMoverBounds,
   setFixtureMoverMountOrientation,
   assignChannelToSubFixture,

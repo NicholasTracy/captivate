@@ -7,6 +7,8 @@ import {
   initFixtureModelConfig,
   MoverMountOrientation,
   isMoverFixtureType,
+  resolveMoverCalibration,
+  type MoverCalibration,
   computeEmitterCentroid,
   emittersForSubfixtureIndex,
   mergeSubRelativeWindowWithEmitterCentroid,
@@ -25,6 +27,8 @@ export interface LightingPreviewFixtureRow {
   fixtureIndex: number
   fixture: Fixture
   fixtureType: FixtureType
+  /** Per-fixture calibration when set, otherwise the fixture type's. */
+  moverCalibration: MoverCalibration
   fixtureId: string
   fixtureName: string
   fixtureLabel: string
@@ -161,6 +165,7 @@ export function buildLightingPreviewRows(
       fixtureIndex: index,
       fixture,
       fixtureType,
+      moverCalibration: resolveMoverCalibration(fixture, fixtureType),
       fixtureId,
       fixtureName,
       groupName,
@@ -450,7 +455,7 @@ export function mapRowsToPreviewFixtures(
       panMax,
       tiltMin,
       tiltMax,
-      moverCalibration: row.fixtureType.moverCalibration,
+      moverCalibration: row.moverCalibration,
       moverBounds: row.fixture.moverBounds,
       moverMountOrientation: row.moverMountOrientation,
       colorChannels,

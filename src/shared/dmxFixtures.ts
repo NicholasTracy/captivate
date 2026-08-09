@@ -3973,8 +3973,27 @@ export interface Fixture {
   window: Window2D_t
   rotation?: FixtureRotation
   groups: string[]
+  /**
+   * Calibration for this head. Aim references (home / front / back / up / down) depend on
+   * where the fixture is rigged, so they cannot be shared across every fixture of a type.
+   * Falls back to the fixture type's calibration when unset — see
+   * {@link resolveMoverCalibration}.
+   */
+  moverCalibration?: MoverCalibration
   moverBounds?: MoverBounds
   moverMountOrientation?: MoverMountOrientation
+}
+
+/** Per-fixture calibration when it has been set, otherwise the fixture type's. */
+export function resolveMoverCalibration(
+  fixture: { moverCalibration?: MoverCalibration } | undefined,
+  fixtureType: { moverCalibration?: MoverCalibration } | undefined
+): MoverCalibration {
+  return (
+    fixture?.moverCalibration ??
+    fixtureType?.moverCalibration ??
+    initMoverCalibration()
+  )
 }
 
 export type Universe = Fixture[]
@@ -4075,6 +4094,18 @@ export function initSubFixture(): SubFixture {
 
 export type FlattenedFixture = {
   intensity: number
+  /**
+   * True when this partition's master/dimmer channel is what applies the split
+   * randomizer. Set by `flatten_fixture` for fixtures with no colour channel to carry
+   * it (colour-wheel heads, plain dimmers) so exactly one channel randomizes.
+   */
+  dimmerAppliesRandomizer?: boolean
+  /**
+   * True when the fixture has a shutter/strobe channel, so it strobes in hardware and
+   * the emitters must not also be gated in software. Set by `flatten_fixture` on every
+   * partition, since the shutter and the emitters can land in different ones.
+   */
+  hasStrobeChannel?: boolean
   channels: [number, FixtureChannel][]
   window: Window2D_t
   groups: string[]

@@ -29,6 +29,7 @@ import { indexArray, zip } from '../../shared/util'
 import { TimeState } from '../../shared/TimeState'
 import { SplitState } from 'renderer/redux/realtimeStore'
 import { getUniverseOverwrites } from '../../renderer/redux/mixerSlice'
+import { getMoverPhaseOrderEntries } from '../../renderer/redux/dmxSlice'
 import { clampNormalized } from '../../math/util'
 import { getParam, type Params } from '../../shared/params'
 import {
@@ -38,9 +39,10 @@ import {
 } from '../../shared/moverPadTargets'
 import {
   moverPhaseOffsetCycles,
-  moverPhaseOrderIndexes,
   moverPhaseStepCycles,
   moverPhaseStepIsActive,
+  resolveMoverPhaseRungs,
+  type MoverPhaseFixture,
   type MoverPhaseOrderEntry,
 } from '../../shared/moverPhaseFollow'
 import { getOutputParamsAtPhaseOffset } from '../../shared/modulation'
@@ -601,34 +603,29 @@ const MOVER_PHASE_AXIS_PARAMS = ['xAxis', 'yAxis'] as const
 const MOVER_PHASE_PAN_PARAMS = ['xAxis'] as const
 const MOVER_PHASE_TILT_PARAMS = ['yAxis'] as const
 
-function buildFixtureAddressMap(
-  universe: CleanReduxState['dmx']['universe']
-): Map<string, { universe: number; channel: number }> {
-  const addressByFixtureId = new Map<string, { universe: number; channel: number }>()
-  for (const fixture of universe) {
-    const fixtureId = typeof fixture.id === 'string' ? fixture.id.trim() : ''
-    if (fixtureId.length <= 0) continue
-    addressByFixtureId.set(fixtureId, {
-      universe: Math.max(1, Math.round(Number(fixture.universe) || 1)),
-      channel: Math.max(0, Math.round(Number(fixture.ch) || 0)),
-    })
-  }
-  return addressByFixtureId
-}
-
-function moverPhaseOrderEntriesForSplit(
+function moverPhaseFixturesForSplit(
   splitMovers: FlattenedFixture[],
-  addressByFixtureId: Map<string, { universe: number; channel: number }>
-): MoverPhaseOrderEntry[] {
-  const entries: MoverPhaseOrderEntry[] = []
-  for (const fixture of splitMovers) {
+  entryByFixtureId: Map<string, MoverPhaseOrderEntry>
+): MoverPhaseFixture[] {
+  const fixtures: MoverPhaseFixture[] = []
+  splitMovers.forEach((fixture, fixtureIdx) => {
     const fixtureId = fixture.fixtureId?.trim() ?? ''
-    if (fixtureId.length <= 0) continue
-    const address = addressByFixtureId.get(fixtureId)
-    if (address === undefined) continue
-    entries.push({ key: fixtureId, ...address })
-  }
-  return entries
+    if (fixtureId.length <= 0) return
+    // Mover group gates tandem / mirror in the pad math, so it gates phase too.
+    const groupKey = fixture.moverGroup?.trim() ?? ''
+    if (groupKey.length <= 0) return
+    const entry = entryByFixtureId.get(fixtureId)
+    if (entry === undefined) return
+    const center = fixtureCenterPosition(fixture)
+    fixtures.push({
+      ...entry,
+      groupKey,
+      x: center.x,
+      y: center.y,
+      sortOrder: fixtureIdx,
+    })
+  })
+  return fixtures
 }
 
 /**
@@ -669,7 +666,14 @@ function buildMoverPhaseAimBySplit(
       moverPhaseStepIsActive(stepY) && Number.isFinite(resolvedAxisParams.yAxis)
     if (!phasePan && !phaseTilt) return null
 
-    return { stepX, stepY, phasePan, phaseTilt }
+    return {
+      stepX,
+      stepY,
+      phasePan,
+      phaseTilt,
+      mirrorLeftRight: getParam(resolvedAxisParams, 'moverMirrorX') > 0.5,
+      mirrorTopBottom: getParam(resolvedAxisParams, 'moverMirrorY') > 0.5,
+    }
   })
 
   if (phaseConfigs.every((config) => config === null)) {
@@ -681,7 +685,9 @@ function buildMoverPhaseAimBySplit(
     state.dmx.fixtureTypesByID,
     state.dmx.moverGroupByFixtureId
   )
-  const addressByFixtureId = buildFixtureAddressMap(state.dmx.universe)
+  const entryByFixtureId = new Map<string, MoverPhaseOrderEntry>(
+    getMoverPhaseOrderEntries(state.dmx).map((entry) => [entry.key, entry])
+  )
 
   return phaseConfigs.map((config, splitIndex) => {
     if (config === null) return null
@@ -690,8 +696,12 @@ function buildMoverPhaseAimBySplit(
       allFixtures,
       splitScenes[splitIndex].groups
     ).filter(hasMoverAxisChannels)
-    const orderIndexByFixtureId = moverPhaseOrderIndexes(
-      moverPhaseOrderEntriesForSplit(splitMovers, addressByFixtureId)
+    const orderIndexByFixtureId = resolveMoverPhaseRungs(
+      moverPhaseFixturesForSplit(splitMovers, entryByFixtureId),
+      {
+        mirrorLeftRight: config.mirrorLeftRight,
+        mirrorTopBottom: config.mirrorTopBottom,
+      }
     )
     if (orderIndexByFixtureId.size <= 1) return null
 
@@ -1032,8 +1042,21 @@ function calculateDmxForUniverse(
 
   if (axisOnlyOverrideMode && moverCalibrationOverride !== null) {
     forEachChannel(all_fixtures, (_fixtureIdx, fixture, channelIdx, channel) => {
-      if (channel.type !== 'axis') return
       if (fixture.fixtureId !== moverCalibrationOverride.fixtureId) return
+
+      // Every other channel sits at its default here, which for a dimmer is `min` and
+      // for a shutter is 0 — so the head aimed correctly but stayed dark and there was
+      // nothing to sight along. Light the fixture being calibrated.
+      if (channel.type === 'master') {
+        writeDmxChannel(channels, channelIdx, channel.max)
+        return
+      }
+      if (channel.type === 'strobe') {
+        writeDmxChannel(channels, channelIdx, channel.default_solid)
+        return
+      }
+
+      if (channel.type !== 'axis') return
 
       const overrideDmx =
         channel.dir === 'x'

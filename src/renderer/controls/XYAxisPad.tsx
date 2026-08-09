@@ -10,6 +10,7 @@ import { isMoverFixtureType } from '../../shared/dmxFixtures'
 import MidiOverlay_xy from '../base/MidiOverlay_xy'
 import { makeSetBaseParamAction } from '../redux/deviceState'
 import {
+  MoverMirrorHelpButton,
   MoverPatternHelpButton,
   MoverPhaseOffsetHelpButton,
 } from '../pages/moverHelpButtons'
@@ -19,19 +20,21 @@ import {
 } from '../../shared/moverPhaseFollow'
 import { useOutputParam } from '../redux/realtimeStore'
 import { useSplitMoverCount } from '../hooks/useMoverPadFixtureTargets'
+import {
+  MOVER_MODE_FOLLOW,
+  MOVER_MODE_TANDEM,
+  normalizeMoverMode,
+} from '../../shared/moverPadTargets'
 
 interface Props {
   splitIndex: number
 }
 
-type MoverModeOption = 'follow' | 'tandem' | 'mirror'
+type MoverModeOption = 'follow' | 'tandem'
 
-const MOVER_MODE_FOLLOW = 0
-const MOVER_MODE_TANDEM = 1
-const MOVER_MODE_MIRROR = 2
 const TANDEM_SPREAD_MAX = 0.65
 const XY_CENTER_DETENT_RADIUS = 0.04
-const MOVER_MODE_OPTIONS: MoverModeOption[] = ['follow', 'tandem', 'mirror']
+const MOVER_MODE_OPTIONS: MoverModeOption[] = ['follow', 'tandem']
 
 function applyCenterDetent(value: number): number {
   return Math.abs(value - 0.5) <= XY_CENTER_DETENT_RADIUS ? 0.5 : value
@@ -46,30 +49,16 @@ function formatPhaseDegrees(value: number | undefined): string {
   return `${Math.round(moverPhaseStepDegrees(value))}°`
 }
 
-function normalizeMoverMode(value: number): number {
-  const rounded = Math.round(value)
-  if (rounded < MOVER_MODE_FOLLOW || rounded > MOVER_MODE_MIRROR) {
-    return MOVER_MODE_FOLLOW
-  }
-  return rounded
-}
-
 function moverModeToOption(mode: number): MoverModeOption {
-  if (mode === MOVER_MODE_TANDEM) return 'tandem'
-  if (mode === MOVER_MODE_MIRROR) return 'mirror'
-  return 'follow'
+  return mode === MOVER_MODE_TANDEM ? 'tandem' : 'follow'
 }
 
 function moverModeFromOption(option: MoverModeOption): number {
-  if (option === 'tandem') return MOVER_MODE_TANDEM
-  if (option === 'mirror') return MOVER_MODE_MIRROR
-  return MOVER_MODE_FOLLOW
+  return option === 'tandem' ? MOVER_MODE_TANDEM : MOVER_MODE_FOLLOW
 }
 
 function moverModeOptionLabel(option: MoverModeOption) {
-  if (option === 'tandem') return 'Tandem'
-  if (option === 'mirror') return 'Mirror'
-  return 'Follow'
+  return option === 'tandem' ? 'Tandem' : 'Follow'
 }
 
 export default function XYAxispad({ splitIndex }: Props) {
@@ -194,22 +183,10 @@ export default function XYAxispad({ splitIndex }: Props) {
             items={MOVER_MODE_OPTIONS}
             labelForItem={moverModeOptionLabel}
             onChange={(newMode) => {
-              const nextMode = moverModeFromOption(newMode)
-              const nextParams: { [key: string]: number } = {
-                moverMode: nextMode,
-              }
-              if (
-                nextMode === MOVER_MODE_MIRROR &&
-                !mirrorXEnabled &&
-                !mirrorYEnabled
-              ) {
-                nextParams.moverMirrorX = 1
-                nextParams.moverMirrorY = 0
-              }
               dispatch(
                 setBaseParams({
                   splitIndex,
-                  params: nextParams,
+                  params: { moverMode: moverModeFromOption(newMode) },
                 })
               )
             }}
@@ -252,55 +229,44 @@ export default function XYAxispad({ splitIndex }: Props) {
           </>
         )}
 
-        {moverMode === MOVER_MODE_MIRROR && (
-          <>
-            <ControlLabel>Mirror Axis</ControlLabel>
-            <RadioGroup>
-              <RadioButton
-                type="button"
-                $active={mirrorXEnabled}
-                title="Mirror on left/right axis"
-                onClick={() => {
-                  const nextX = mirrorXEnabled ? 0 : 1
-                  // Keep at least one axis active in mirror mode.
-                  const safeNextX = nextX === 0 && !mirrorYEnabled ? 1 : nextX
-                  dispatch(
-                    setBaseParams({
-                      splitIndex,
-                      params: {
-                        moverMirrorX: safeNextX,
-                      },
-                    })
-                  )
-                }}
-              >
-                <RadioDot $active={mirrorXEnabled} aria-hidden />
-                <span>L/R</span>
-              </RadioButton>
-              <RadioButton
-                type="button"
-                $active={mirrorYEnabled}
-                title="Mirror on top/bottom axis"
-                onClick={() => {
-                  const nextY = mirrorYEnabled ? 0 : 1
-                  // Keep at least one axis active in mirror mode.
-                  const safeNextY = nextY === 0 && !mirrorXEnabled ? 1 : nextY
-                  dispatch(
-                    setBaseParams({
-                      splitIndex,
-                      params: {
-                        moverMirrorY: safeNextY,
-                      },
-                    })
-                  )
-                }}
-              >
-                <RadioDot $active={mirrorYEnabled} aria-hidden />
-                <span>T/B</span>
-              </RadioButton>
-            </RadioGroup>
-          </>
-        )}
+        <ControlLabelRow>
+          <ControlLabel>Mirror</ControlLabel>
+          <MoverMirrorHelpButton />
+        </ControlLabelRow>
+        <RadioGroup>
+          <RadioButton
+            type="button"
+            $active={mirrorXEnabled}
+            title="Mirror the right-hand movers left/right"
+            onClick={() =>
+              dispatch(
+                setBaseParams({
+                  splitIndex,
+                  params: { moverMirrorX: mirrorXEnabled ? 0 : 1 },
+                })
+              )
+            }
+          >
+            <RadioDot $active={mirrorXEnabled} aria-hidden />
+            <span>L/R</span>
+          </RadioButton>
+          <RadioButton
+            type="button"
+            $active={mirrorYEnabled}
+            title="Mirror the lower movers top/bottom"
+            onClick={() =>
+              dispatch(
+                setBaseParams({
+                  splitIndex,
+                  params: { moverMirrorY: mirrorYEnabled ? 0 : 1 },
+                })
+              )
+            }
+          >
+            <RadioDot $active={mirrorYEnabled} aria-hidden />
+            <span>T/B</span>
+          </RadioButton>
+        </RadioGroup>
 
         <ControlLabelRow>
           <ControlLabel>Phase Offset Follow</ControlLabel>
@@ -310,7 +276,7 @@ export default function XYAxispad({ splitIndex }: Props) {
           <PhaseLabel>Pan</PhaseLabel>
           <SpreadInput
             type="range"
-            title="Pan phase offset per mover, in DMX-address order"
+            title="Pan phase offset per mover, in Movers-tab order"
             min={0}
             max={1}
             step={0.005}
@@ -334,7 +300,7 @@ export default function XYAxispad({ splitIndex }: Props) {
           <PhaseLabel>Tilt</PhaseLabel>
           <SpreadInput
             type="range"
-            title="Tilt phase offset per mover, in DMX-address order"
+            title="Tilt phase offset per mover, in Movers-tab order"
             min={0}
             max={1}
             step={0.005}

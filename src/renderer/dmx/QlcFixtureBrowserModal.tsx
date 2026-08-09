@@ -25,11 +25,13 @@ import {
 import { FixtureType } from '../../shared/dmxFixtures'
 import { parseFixtureLibrary } from '../../shared/fixtureLibrary'
 import FixtureLibraryInfoButton from './FixtureLibraryInfoButton'
+import { fixtureFileDisplayName } from '../../shared/captivateFixtureLibraryRemote'
 import {
-  captivateFixtureLibraryContentsApiUrl,
-  CAPTIVATE_FIXTURE_LIBRARY_DEFAULT_BRANCH,
-  fixtureFileDisplayName,
-} from '../../shared/captivateFixtureLibraryRemote'
+  invalidateFixtureLibraryIndex,
+  loadFixtureLibraryIndex,
+  type FixtureLibraryIndex,
+  type FixtureSourceId,
+} from './fixtureLibrarySources'
 
 interface Props {
   open: boolean
@@ -37,63 +39,11 @@ interface Props {
   onImportFixtures: (fixtures: FixtureType[]) => void
 }
 
-interface GitHubContentItem {
-  name: string
-  path: string
-  type: 'file' | 'dir'
-  download_url: string | null
-}
-
-type GitHubFixtureFileItem = GitHubContentItem & {
-  type: 'file'
-  download_url: string
-}
-
-type FixtureSourceId = 'captivate' | 'qlc' | 'ofl'
-
-type ManufacturerOption = {
-  key: string
-  label: string
-}
-
-type FixtureFile = {
-  name: string
-  path: string
-  downloadUrl: string
-}
-
-const QLC_FIXTURES_API_URL =
-  'https://api.github.com/repos/mcallegari/qlcplus/contents/resources/fixtures'
-const OFL_FIXTURES_API_URL =
-  'https://api.github.com/repos/OpenLightingProject/open-fixture-library/contents/fixtures'
-const OFL_MANUFACTURERS_URL =
-  'https://raw.githubusercontent.com/OpenLightingProject/open-fixture-library/master/fixtures/manufacturers.json'
-const CAPTIVATE_FIXTURES_API_URL = captivateFixtureLibraryContentsApiUrl('fixtures')
-
 const fixtureSources: { id: FixtureSourceId; label: string }[] = [
   { id: 'captivate', label: 'Captivate Community Library' },
   { id: 'qlc', label: 'QLC+ Fixture Library' },
   { id: 'ofl', label: 'Open Fixture Library' },
 ]
-
-async function fetchGitHubContents(url: string): Promise<GitHubContentItem[]> {
-  const response = await fetch(url, {
-    headers: {
-      Accept: 'application/vnd.github+json',
-    },
-  })
-
-  if (!response.ok) {
-    throw new Error(`GitHub request failed (${response.status}).`)
-  }
-
-  const payload = (await response.json()) as unknown
-  if (!Array.isArray(payload)) {
-    throw new Error('Unexpected GitHub response format.')
-  }
-
-  return payload as GitHubContentItem[]
-}
 
 function errorMessage(err: unknown, fallback: string): string {
   if (err instanceof Error && err.message.trim().length > 0) {
@@ -102,18 +52,14 @@ function errorMessage(err: unknown, fallback: string): string {
   return fallback
 }
 
-function manufacturerCacheKey(source: FixtureSourceId, manufacturerKey: string): string {
-  return `${source}:${manufacturerKey}`
-}
-
 export default function QlcFixtureBrowserModal({
   open,
   onClose,
   onImportFixtures,
 }: Props) {
   const [source, setSource] = useState<FixtureSourceId>('captivate')
-  const [manufacturersBySource, setManufacturersBySource] = useState<
-    Partial<Record<FixtureSourceId, ManufacturerOption[]>>
+  const [indexBySource, setIndexBySource] = useState<
+    Partial<Record<FixtureSourceId, FixtureLibraryIndex>>
   >({})
   const [selectedManufacturerBySource, setSelectedManufacturerBySource] =
     useState<Partial<Record<FixtureSourceId, string>>>({})
@@ -121,23 +67,20 @@ export default function QlcFixtureBrowserModal({
 
   const [fixtureSearch, setFixtureSearch] = useState('')
   const [selectedFixturePath, setSelectedFixturePath] = useState('')
-  const [fixturesByManufacturer, setFixturesByManufacturer] = useState<{
-    [cacheKey: string]: FixtureFile[]
-  }>({})
 
   const [isLoadingManufacturers, setIsLoadingManufacturers] = useState(false)
-  const [isLoadingFixtures, setIsLoadingFixtures] = useState(false)
   const [isImporting, setIsImporting] = useState(false)
   const [message, setMessage] = useState('')
 
-  const manufacturers = manufacturersBySource[source] ?? []
+  const sourceIndex = indexBySource[source]
+  const manufacturers = sourceIndex?.manufacturers ?? []
   const selectedManufacturer = selectedManufacturerBySource[source] ?? ''
   const selectedManufacturerOption = manufacturers.find(
     (manufacturer) => manufacturer.key === selectedManufacturer
   )
-  const fixtureCache = manufacturerCacheKey(source, selectedManufacturer)
+  // One index per source covers every manufacturer, so switching is instant.
   const fixturesForSelectedManufacturer =
-    fixturesByManufacturer[fixtureCache] ?? []
+    sourceIndex?.fixturesByManufacturer[selectedManufacturer] ?? []
 
   const selectedFixture = useMemo(
     () =>
@@ -176,83 +119,24 @@ export default function QlcFixtureBrowserModal({
     source === 'captivate' ? 'Filter by model name' : 'Filter fixture files'
 
   useEffect(() => {
-    if (!open || manufacturers.length > 0 || isLoadingManufacturers) {
+    if (!open || sourceIndex !== undefined || isLoadingManufacturers) {
       return
     }
 
-    void loadManufacturers(source)
-  }, [open, source, manufacturers.length, isLoadingManufacturers])
+    void loadSourceIndex(source)
+  }, [open, source, sourceIndex, isLoadingManufacturers])
 
-  useEffect(() => {
-    if (!open || selectedManufacturer.length === 0) {
-      return
-    }
-
-    if (fixturesByManufacturer[fixtureCache] !== undefined) {
-      return
-    }
-
-    void loadFixtures(source, selectedManufacturer)
-  }, [open, source, selectedManufacturer, fixturesByManufacturer, fixtureCache])
-
-  async function loadManufacturers(sourceId: FixtureSourceId) {
+  async function loadSourceIndex(sourceId: FixtureSourceId) {
     setIsLoadingManufacturers(true)
     setMessage('')
 
     try {
-      let nextManufacturers: ManufacturerOption[] = []
+      const index = await loadFixtureLibraryIndex(sourceId)
 
-      if (sourceId === 'qlc') {
-        const content = await fetchGitHubContents(QLC_FIXTURES_API_URL)
-        nextManufacturers = content
-          .filter((entry) => entry.type === 'dir')
-          .map((entry) => ({
-            key: entry.name,
-            label: entry.name,
-          }))
-          .sort((left, right) => left.label.localeCompare(right.label))
-      } else if (sourceId === 'captivate') {
-        const content = await fetchGitHubContents(CAPTIVATE_FIXTURES_API_URL)
-        nextManufacturers = content
-          .filter((entry) => entry.type === 'dir')
-          .map((entry) => ({
-            key: entry.name,
-            label: entry.name.replace(/-/g, ' '),
-          }))
-          .sort((left, right) => left.label.localeCompare(right.label))
-      } else {
-        const response = await fetch(OFL_MANUFACTURERS_URL)
-        if (!response.ok) {
-          throw new Error(`Open Fixture Library request failed (${response.status}).`)
-        }
-
-        const payload = (await response.json()) as unknown
-        const record = payload as { [key: string]: unknown }
-        nextManufacturers = Object.entries(record)
-          .filter(([key, value]) => {
-            if (key === '$schema') return false
-            return value !== null && typeof value === 'object'
-          })
-          .map(([key, value]) => {
-            const name = (value as { name?: unknown }).name
-            return {
-              key,
-              label:
-                typeof name === 'string' && name.trim().length > 0
-                  ? name.trim()
-                  : key,
-            }
-          })
-          .sort((left, right) => left.label.localeCompare(right.label))
-      }
-
-      setManufacturersBySource((prev) => ({
-        ...prev,
-        [sourceId]: nextManufacturers,
-      }))
+      setIndexBySource((prev) => ({ ...prev, [sourceId]: index }))
       setSelectedManufacturerBySource((prev) => {
         const currentSelection = prev[sourceId]
-        const selectionIsValid = nextManufacturers.some(
+        const selectionIsValid = index.manufacturers.some(
           (manufacturer) => manufacturer.key === currentSelection
         )
         return {
@@ -260,75 +144,18 @@ export default function QlcFixtureBrowserModal({
           [sourceId]:
             selectionIsValid && currentSelection !== undefined
               ? currentSelection
-              : nextManufacturers[0]?.key ?? '',
+              : index.manufacturers[0]?.key ?? '',
         }
       })
+      if (index.warning !== undefined) {
+        setMessage(index.warning)
+      }
     } catch (err) {
       setMessage(
-        `Failed to load manufacturers: ${errorMessage(err, 'Unknown error.')}`
+        `Failed to load fixture library: ${errorMessage(err, 'Unknown error.')}`
       )
     } finally {
       setIsLoadingManufacturers(false)
-    }
-  }
-
-  async function loadFixtures(
-    sourceId: FixtureSourceId,
-    manufacturer: string
-  ) {
-    setIsLoadingFixtures(true)
-    setMessage('')
-
-    try {
-      const encodedManufacturer = encodeURIComponent(manufacturer)
-      const baseUrl =
-        sourceId === 'qlc'
-          ? QLC_FIXTURES_API_URL
-          : sourceId === 'captivate'
-            ? CAPTIVATE_FIXTURES_API_URL
-            : OFL_FIXTURES_API_URL
-      const ref =
-        sourceId === 'captivate'
-          ? CAPTIVATE_FIXTURE_LIBRARY_DEFAULT_BRANCH
-          : 'master'
-      const content = await fetchGitHubContents(
-        `${baseUrl}/${encodedManufacturer}?ref=${ref}`
-      )
-      const extension =
-        sourceId === 'qlc' ? '.qxf' : '.json'
-
-      const fixtureFiles = content
-        .filter(
-          (entry): entry is GitHubFixtureFileItem =>
-            entry.type === 'file' &&
-            entry.name.toLowerCase().endsWith(extension) &&
-            typeof entry.download_url === 'string'
-        )
-        .map((entry) => ({
-          name: entry.name,
-          path: entry.path,
-          downloadUrl: entry.download_url,
-        }))
-        .sort((left, right) => left.name.localeCompare(right.name))
-
-      const cacheKey = manufacturerCacheKey(sourceId, manufacturer)
-      setFixturesByManufacturer((prev) => ({
-        ...prev,
-        [cacheKey]: fixtureFiles,
-      }))
-      setSelectedFixturePath(fixtureFiles[0]?.path ?? '')
-    } catch (err) {
-      const cacheKey = manufacturerCacheKey(sourceId, manufacturer)
-      setFixturesByManufacturer((prev) => ({
-        ...prev,
-        [cacheKey]: [],
-      }))
-      setSelectedFixturePath('')
-      setMessage(
-        `Failed to load fixtures: ${errorMessage(err, 'Unknown error.')}`
-      )
-    } finally {
-      setIsLoadingFixtures(false)
     }
   }
 
@@ -380,9 +207,8 @@ export default function QlcFixtureBrowserModal({
       ...prev,
       [source]: manufacturer,
     }))
-    const cachedFixtures =
-      fixturesByManufacturer[manufacturerCacheKey(source, manufacturer)]
-    setSelectedFixturePath(cachedFixtures?.[0]?.path ?? '')
+    const fixtures = sourceIndex?.fixturesByManufacturer[manufacturer]
+    setSelectedFixturePath(fixtures?.[0]?.path ?? '')
     setFixtureSearch('')
   }
 
@@ -396,7 +222,8 @@ export default function QlcFixtureBrowserModal({
   }
 
   function refreshCurrentSource() {
-    setManufacturersBySource((prev) => {
+    invalidateFixtureLibraryIndex(source)
+    setIndexBySource((prev) => {
       const next = { ...prev }
       delete next[source]
       return next
@@ -406,17 +233,8 @@ export default function QlcFixtureBrowserModal({
       delete next[source]
       return next
     })
-    setFixturesByManufacturer((prev) => {
-      const next: { [key: string]: FixtureFile[] } = {}
-      for (const [cacheKey, value] of Object.entries(prev)) {
-        if (!cacheKey.startsWith(`${source}:`)) {
-          next[cacheKey] = value
-        }
-      }
-      return next
-    })
     setSelectedFixturePath('')
-    void loadManufacturers(source)
+    void loadSourceIndex(source)
   }
 
   const disableImport =
@@ -533,30 +351,24 @@ export default function QlcFixtureBrowserModal({
               />
             </Box>
             <List dense sx={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
-              {isLoadingFixtures && (
-                <Box sx={{ display: 'flex', justifyContent: 'center', p: 2 }}>
-                  <CircularProgress size={22} />
-                </Box>
-              )}
-              {!isLoadingFixtures &&
-                filteredFixtures.map((fixtureFile) => (
-                  <ListItemButton
-                    key={fixtureFile.path}
-                    selected={fixtureFile.path === selectedFixturePath}
-                    onClick={() => {
-                      setSelectedFixturePath(fixtureFile.path)
-                    }}
-                  >
-                    <ListItemText
-                      primary={
-                        source === 'captivate'
-                          ? fixtureFileDisplayName(fixtureFile.name)
-                          : fixtureFile.name
-                      }
-                      secondary={fixtureFile.path}
-                    />
-                  </ListItemButton>
-                ))}
+              {filteredFixtures.map((fixtureFile) => (
+                <ListItemButton
+                  key={fixtureFile.path}
+                  selected={fixtureFile.path === selectedFixturePath}
+                  onClick={() => {
+                    setSelectedFixturePath(fixtureFile.path)
+                  }}
+                >
+                  <ListItemText
+                    primary={
+                      source === 'captivate'
+                        ? fixtureFileDisplayName(fixtureFile.name)
+                        : fixtureFile.name
+                    }
+                    secondary={fixtureFile.path}
+                  />
+                </ListItemButton>
+              ))}
             </List>
           </Paper>
         </Box>
@@ -565,7 +377,7 @@ export default function QlcFixtureBrowserModal({
       <DialogActions>
         <Button
           onClick={refreshCurrentSource}
-          disabled={isLoadingManufacturers || isLoadingFixtures || isImporting}
+          disabled={isLoadingManufacturers || isImporting}
         >
           Refresh
         </Button>

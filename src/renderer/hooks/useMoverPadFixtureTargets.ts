@@ -8,13 +8,13 @@ import {
 } from '../../shared/moverPadTargets'
 import {
   moverPhaseOffsetCycles,
-  moverPhaseOrderIndexes,
   moverPhaseStepCycles,
   moverPhaseStepIsActive,
+  resolveMoverPhaseRungs,
 } from '../../shared/moverPhaseFollow'
 import { getOutputParamsAtPhaseOffset } from '../../shared/modulation'
 import { evaluateSceneGroups } from '../../shared/sceneGroups'
-import { defaultOutputParams, type Params } from '../../shared/params'
+import { defaultOutputParams, getParam, type Params } from '../../shared/params'
 import { useActiveLightScene, useDmxSelector, useTypedSelector } from '../redux/store'
 import { useOutputParams } from '../redux/realtimeStore'
 import { useLfoAudioMetrics, useLfoBeats } from '../redux/realtimeSelectors'
@@ -58,12 +58,14 @@ type SplitMoverFixture = {
   sortOrder: number
   universe: number
   channel: number
+  order?: number
 }
 
 /** Movers this split drives, with everything the pad preview needs to place them. */
 function collectSplitMovers(
   splitGroups: Record<string, boolean | undefined>,
   moverGroupByFixtureId: Record<string, string>,
+  moverPhaseOrderByFixtureId: Record<string, number>,
   universe: PreviewUniverseFixture[],
   fixtureTypesByID: Record<string, FixtureType>
 ): SplitMoverFixture[] {
@@ -95,6 +97,7 @@ function collectSplitMovers(
       sortOrder: fixtureIndex,
       universe: Math.max(1, Math.round(Number(fixture.universe) || 1)),
       channel: Math.max(0, Math.round(Number(fixture.ch) || 0)),
+      order: moverPhaseOrderByFixtureId[fixtureId],
     })
   })
 
@@ -176,13 +179,20 @@ export function useMoverPadFixtureTargets(
     const movers = collectSplitMovers(
       splitGroups,
       dmx.moverGroupByFixtureId,
+      dmx.moverPhaseOrderByFixtureId,
       dmx.universe,
       dmx.fixtureTypesByID
     )
 
     const baseAimByKey = new Map<string, { x?: number; y?: number }>()
     if (phasePan || phaseTilt) {
-      const orderIndexByKey = moverPhaseOrderIndexes(movers)
+      const orderIndexByKey = resolveMoverPhaseRungs(
+        movers.map((mover) => ({ ...mover, groupKey: mover.groupName })),
+        {
+          mirrorLeftRight: getParam(params, 'moverMirrorX') > 0.5,
+          mirrorTopBottom: getParam(params, 'moverMirrorY') > 0.5,
+        }
+      )
       for (const [key, orderIndex] of orderIndexByKey) {
         if (orderIndex === 0) continue
         const aim: { x?: number; y?: number } = {}
@@ -220,6 +230,7 @@ export function useMoverPadFixtureTargets(
     beats,
     dmx.fixtureTypesByID,
     dmx.moverGroupByFixtureId,
+    dmx.moverPhaseOrderByFixtureId,
     dmx.universe,
     lightScene,
     moverAdvancedControlEnabled,
