@@ -11,6 +11,15 @@ declare module 'midi' {
     openPort: (portIndex: number) => void
     closePort: () => void
     isPortOpen: () => boolean
+    /**
+     * Sysex, timing, and active sensing are ignored by default. Pass false to
+     * receive that type — e.g. ignoreTypes(true, false, true) for MIDI clock.
+     */
+    ignoreTypes: (
+      sysex: boolean,
+      timing: boolean,
+      activeSensing: boolean
+    ) => void
     constructor()
   }
 }

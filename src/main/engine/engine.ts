@@ -222,61 +222,97 @@ let _audioBeatClockNudgeBpm = 0
 let _audioBeatClockLastUpdateMs = 0
 
 const MIDI_CLOCK_PPQ = 24
-const MIDI_CLOCK_MAX_TICK_SAMPLES = 192
+const MIDI_CLOCK_MIN_BPM = 45
+const MIDI_CLOCK_MAX_BPM = 220
+/** ~8 beats of tick history: long enough to average out delivery jitter. */
+const MIDI_CLOCK_MAX_TICK_SAMPLES = 193
+/** Report a tempo only once a full beat of evenly spaced ticks is buffered. */
+const MIDI_CLOCK_MIN_TICK_SAMPLES = MIDI_CLOCK_PPQ + 1
 const MIDI_CLOCK_STALE_MS = 450
-const MIDI_CLOCK_MIN_TICK_MS = 0.07
-const MIDI_CLOCK_MAX_TICK_MS = 22
-let _midiClockTickWallMs: number[] = []
+// Discontinuity guards, not the tempo gate — that happens after averaging.
+// Tick spacing runs 11.4ms (220 BPM) to 55.6ms (45 BPM), so these bounds sit
+// clear of both ends: delivery jitter must not trip them, only a dropped tick
+// or a transport jump should.
+const MIDI_CLOCK_MIN_TICK_MS = 2
+const MIDI_CLOCK_MAX_TICK_MS = 90
+/** Ignore a second clock source until the current one has gone quiet this long. */
+const MIDI_CLOCK_SOURCE_TAKEOVER_MS = 1000
+let _midiClockTickAtMs: number[] = []
 let _midiClockSmoothedBpm: number | null = null
-let _midiClockLastTickWallMs = 0
+let _midiClockLastTickAtMs = 0
+let _midiClockSourceName: string | null = null
 
-function handleMidiSystemRealtime(status: number) {
-  const wallMs = Date.now()
+function handleMidiSystemRealtime(status: number, portName: string) {
+  if (status !== 0xf8 && status !== 0xfa && status !== 0xfc) {
+    return
+  }
+  // performance.now() is monotonic and sub-millisecond. Date.now() quantizes to
+  // whole milliseconds, which at 24 PPQ is a ~5 BPM step between adjacent
+  // tempos — not enough resolution to represent common tempos at all.
+  const nowMs = performance.now()
+
+  if (_midiClockSourceName !== portName) {
+    // Two ports both sending clock would interleave into one doubled-rate
+    // stream, so follow a single source and only switch when it goes silent.
+    if (
+      _midiClockSourceName !== null &&
+      nowMs - _midiClockLastTickAtMs < MIDI_CLOCK_SOURCE_TAKEOVER_MS
+    ) {
+      return
+    }
+    _midiClockSourceName = portName
+    _midiClockTickAtMs.length = 0
+    _midiClockSmoothedBpm = null
+  }
+
   if (status === 0xfa || status === 0xfc) {
-    _midiClockTickWallMs.length = 0
+    _midiClockTickAtMs.length = 0
     if (status === 0xfc) {
       _midiClockSmoothedBpm = null
     }
     return
   }
-  if (status !== 0xf8) {
-    return
-  }
 
-  _midiClockLastTickWallMs = wallMs
-  _midiClockTickWallMs.push(wallMs)
-  while (_midiClockTickWallMs.length > MIDI_CLOCK_MAX_TICK_SAMPLES) {
-    _midiClockTickWallMs.shift()
-  }
-  if (_midiClockTickWallMs.length < MIDI_CLOCK_PPQ + 6) {
-    return
-  }
-
-  const intervals: number[] = []
-  const start = Math.max(1, _midiClockTickWallMs.length - 72)
-  for (let i = start; i < _midiClockTickWallMs.length; i++) {
-    const dt = _midiClockTickWallMs[i]! - _midiClockTickWallMs[i - 1]!
-    if (Number.isFinite(dt) && dt > MIDI_CLOCK_MIN_TICK_MS && dt < MIDI_CLOCK_MAX_TICK_MS) {
-      intervals.push(dt)
+  const prevTickAtMs = _midiClockTickAtMs[_midiClockTickAtMs.length - 1]
+  if (prevTickAtMs !== undefined) {
+    const dt = nowMs - prevTickAtMs
+    if (dt < MIDI_CLOCK_MIN_TICK_MS || dt > MIDI_CLOCK_MAX_TICK_MS) {
+      // Discontinuity — restart the window rather than average across the gap.
+      _midiClockTickAtMs.length = 0
     }
   }
-  if (intervals.length < MIDI_CLOCK_PPQ) {
+  _midiClockLastTickAtMs = nowMs
+  _midiClockTickAtMs.push(nowMs)
+  while (_midiClockTickAtMs.length > MIDI_CLOCK_MAX_TICK_SAMPLES) {
+    _midiClockTickAtMs.shift()
+  }
+  if (_midiClockTickAtMs.length < MIDI_CLOCK_MIN_TICK_SAMPLES) {
     return
   }
 
-  const slice = intervals.slice(-48)
-  slice.sort((a, b) => a - b)
-  const med = slice[Math.floor(slice.length / 2)]!
-  if (!Number.isFinite(med) || med <= 0) {
+  // Average the tick spacing over the whole window rather than taking a median
+  // of individual gaps: jitter on any one delivery is divided by the sample
+  // count instead of landing straight in the estimate.
+  const spanMs =
+    _midiClockTickAtMs[_midiClockTickAtMs.length - 1]! - _midiClockTickAtMs[0]!
+  const avgTickMs = spanMs / (_midiClockTickAtMs.length - 1)
+  if (!Number.isFinite(avgTickMs) || avgTickMs <= 0) {
     return
   }
 
-  const instantBpm = 60000 / (med * MIDI_CLOCK_PPQ)
-  if (!Number.isFinite(instantBpm) || instantBpm < 45 || instantBpm > 220) {
+  const instantBpm = 60000 / (avgTickMs * MIDI_CLOCK_PPQ)
+  if (
+    !Number.isFinite(instantBpm) ||
+    instantBpm < MIDI_CLOCK_MIN_BPM ||
+    instantBpm > MIDI_CLOCK_MAX_BPM
+  ) {
     return
   }
 
   if (_midiClockSmoothedBpm === null || !Number.isFinite(_midiClockSmoothedBpm)) {
+    console.log(
+      `MIDI clock locked to "${portName}" at ${instantBpm.toFixed(2)} BPM`
+    )
     _midiClockSmoothedBpm = instantBpm
   } else {
     const delta = Math.abs(instantBpm - _midiClockSmoothedBpm)
@@ -292,15 +328,15 @@ function getMidiClockDetectedBpm(controlState: CleanReduxState | null): number |
   if (controlState.control.device.connectionSettings.midiClockBpmEnabled !== true) {
     return null
   }
-  const ageMs = Date.now() - _midiClockLastTickWallMs
+  const ageMs = performance.now() - _midiClockLastTickAtMs
   if (!Number.isFinite(ageMs) || ageMs > MIDI_CLOCK_STALE_MS) {
     return null
   }
   if (
     _midiClockSmoothedBpm === null ||
     !Number.isFinite(_midiClockSmoothedBpm) ||
-    _midiClockSmoothedBpm < 45 ||
-    _midiClockSmoothedBpm > 220
+    _midiClockSmoothedBpm < MIDI_CLOCK_MIN_BPM ||
+    _midiClockSmoothedBpm > MIDI_CLOCK_MAX_BPM
   ) {
     return null
   }
@@ -777,8 +813,8 @@ export function start(
     onMessage: (message) => {
       _midiThrottle.call(midiInputID(message), message)
     },
-    onMidiSystemRealtime: (status) => {
-      handleMidiSystemRealtime(status)
+    onMidiSystemRealtime: (status, portName) => {
+      handleMidiSystemRealtime(status, portName)
     },
     getConnectable: () => {
       return _controlState ? _controlState.control.device.connectable.midi : []

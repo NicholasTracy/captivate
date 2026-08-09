@@ -15,7 +15,7 @@ interface Config {
   onUpdate: (activeDevices: UpdatePayload) => void
   onMessage: (message: MessagePayload) => void
   /** MIDI realtime: 0xF8 clock, 0xFA start, 0xFC stop (single-byte messages). */
-  onMidiSystemRealtime?: (status: number, wallMs: number) => void
+  onMidiSystemRealtime?: (status: number, portName: string) => void
   getConnectable: () => ConnectionId[]
 }
 
@@ -65,7 +65,7 @@ function updateInputs(config: Config) {
     })
     if (inputs[portName] === undefined) {
       if (connectable.find((c) => c === portName)) {
-        inputs[portName] = newInput(i, config)
+        inputs[portName] = newInput(i, portName, config)
       }
     }
   }
@@ -92,7 +92,7 @@ function updateInputs(config: Config) {
   config.onUpdate(status)
 }
 
-function newInput(index: number, config: Config) {
+function newInput(index: number, portName: string, config: Config) {
   const input = new Input()
 
   input.on('message', (_dt, message) => {
@@ -102,7 +102,7 @@ function newInput(index: number, config: Config) {
       status === 0xfa ||
       status === 0xfc
     ) {
-      config.onMidiSystemRealtime?.(status, Date.now())
+      config.onMidiSystemRealtime?.(status, portName)
       return
     }
     const midiMessage = parseMessage(message)
@@ -111,6 +111,9 @@ function newInput(index: number, config: Config) {
     // I'm not sure what that's good for yet?
   })
 
+  // RtMidi discards sysex, timing, and active sensing by default. Timing must be
+  // un-ignored or 0xF8 clock ticks never reach the callback above.
+  input.ignoreTypes(true, false, true)
   input.openPort(index)
 
   return input
