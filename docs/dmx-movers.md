@@ -27,6 +27,9 @@ Entry points:
 | Connections UI | `src/renderer/overlays/Devices.tsx` |
 | Movers page / pad targets | `src/renderer/pages/Movers.tsx`, `src/shared/moverPadTargets.ts` |
 
+Live 3D placement / color preview is a separate renderer, not an output path:
+[Lighting 3D](lighting-3d.md).
+
 ## Universes and rates
 
 | Constraint | Value |
